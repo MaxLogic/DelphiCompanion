@@ -1,0 +1,48 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{DC160EE2-1682-44FF-B906-53C01347265D}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="MaxLogicDelphiCompanion.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="..\..\MaxLogicFoundation\Package\MaxLogicFoundationR.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="MaxLogicDelphiCompanion">
+        <MSBuild Projects="MaxLogicDelphiCompanion.dproj"/>
+    </Target>
+    <Target Name="MaxLogicDelphiCompanion:Clean">
+        <MSBuild Projects="MaxLogicDelphiCompanion.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="MaxLogicDelphiCompanion:Make">
+        <MSBuild Projects="MaxLogicDelphiCompanion.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="MaxLogicFoundationR">
+        <MSBuild Projects="..\..\MaxLogicFoundation\Package\MaxLogicFoundationR.dproj"/>
+    </Target>
+    <Target Name="MaxLogicFoundationR:Clean">
+        <MSBuild Projects="..\..\MaxLogicFoundation\Package\MaxLogicFoundationR.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="MaxLogicFoundationR:Make">
+        <MSBuild Projects="..\..\MaxLogicFoundation\Package\MaxLogicFoundationR.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="MaxLogicDelphiCompanion;MaxLogicFoundationR"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="MaxLogicDelphiCompanion:Clean;MaxLogicFoundationR:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="MaxLogicDelphiCompanion:Make;MaxLogicFoundationR:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>

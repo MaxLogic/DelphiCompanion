@@ -1,0 +1,60 @@
+package MaxLogicDelphiCompanion;
+
+{$R *.res}
+{$IFDEF IMPLICITBUILDING This IFDEF should not be used by users}
+{$ALIGN 8}
+{$ASSERTIONS ON}
+{$BOOLEVAL OFF}
+{$DEBUGINFO OFF}
+{$EXTENDEDSYNTAX ON}
+{$IMPORTEDDATA ON}
+{$IOCHECKS ON}
+{$LOCALSYMBOLS ON}
+{$LONGSTRINGS ON}
+{$OPENSTRINGS ON}
+{$OPTIMIZATION ON}
+{$OVERFLOWCHECKS OFF}
+{$RANGECHECKS OFF}
+{$REFERENCEINFO OFF}
+{$SAFEDIVIDE OFF}
+{$STACKFRAMES OFF}
+{$TYPEDADDRESS OFF}
+{$VARSTRINGCHECKS ON}
+{$WRITEABLECONST OFF}
+{$MINENUMSIZE 1}
+{$IMAGEBASE $400000}
+{$DEFINE RELEASE}
+{$DEFINE NeverUninstall}
+{$DEFINE NeverSleepOnMMThreadContention}
+{$DEFINE UseSwitchToThread}
+{$DEFINE UseReleaseStack}
+{$DEFINE ZUGFeRD_Support}
+{$ENDIF IMPLICITBUILDING}
+{$DESCRIPTION 'MaxLogic Delphi Companion'}
+{$LIBSUFFIX AUTO}
+{$DESIGNONLY}
+{$IMPLICITBUILD ON}
+
+requires
+  rtl,
+  vcl,
+  designide,
+  MaxLogicFoundationR;
+
+contains
+  MaxLogic.DelphiCompanion.Register in '..\src\MaxLogic.DelphiCompanion.Register.pas',
+  MaxLogic.DelphiCompanion.Wizard in '..\src\MaxLogic.DelphiCompanion.Wizard.pas',
+  MaxLogic.DelphiCompanion.KeyboardBinding in '..\src\MaxLogic.DelphiCompanion.KeyboardBinding.pas',
+  MaxLogic.DelphiCompanion.Pickers in '..\src\MaxLogic.DelphiCompanion.Pickers.pas',
+  MaxLogic.DelphiCompanion.Providers in '..\src\MaxLogic.DelphiCompanion.Providers.pas',
+  MaxLogic.DelphiCompanion.Settings in '..\src\MaxLogic.DelphiCompanion.Settings.pas',
+  MaxLogic.DelphiCompanion.Integration in '..\src\MaxLogic.DelphiCompanion.Integration.pas',
+  MaxLogic.DelphiCompanion.OptionsForm in '..\src\MaxLogic.DelphiCompanion.OptionsForm.pas',
+  MaxLogic.DelphiCompanion.IdeApi in '..\src\MaxLogic.DelphiCompanion.IdeApi.pas',
+  MaxLogic.DelphiCompanion.CompileSounds in '..\src\MaxLogic.DelphiCompanion.CompileSounds.pas',
+  MaxLogic.DelphiCompanion.FocusErrorInsight in '..\src\MaxLogic.DelphiCompanion.FocusErrorInsight.pas',
+  maxLogic.DelphiCompanion.Logger in '..\src\maxLogic.DelphiCompanion.Logger.pas',
+  maxLogic.DelphiCompanion.IdeUiInspector in '..\src\maxLogic.DelphiCompanion.IdeUiInspector.pas';
+
+end.
+
