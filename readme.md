@@ -59,3 +59,4 @@ Please report issues or suggestions in the [MaxLogic repository](https://github.
 ## License
 
 MaxLogic Delphi Companion is released under a permissive license. See the repository for details. Embarcadero, RAD Studio, and Delphi are trademarks of their respective owners.
+
