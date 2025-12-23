@@ -37,7 +37,7 @@ MaxLogic Delphi Companion (MDC) is a RAD Studio Delphi 12+ IDE add-in focused on
 
 ### Persistence
 
-- Settings are stored in `%APPDATA%\MaxLogic\MDC.ini` (UTF-8 INI file).
+- Settings are stored in `%APPDATA%\MaxLogic\DelphiCompanion\MDC.ini` (UTF-8 INI file).
 - Window size/position is saved for pickers and the Problems dialog.
 
 ## Installation
@@ -49,7 +49,7 @@ MaxLogic Delphi Companion (MDC) is a RAD Studio Delphi 12+ IDE add-in focused on
 
 ## Notes
 
-- Logging (when enabled) is written to `%AppData%\MaxLogic\mdc.log`.
+- Logging (when enabled) is written to `%AppData%\MaxLogic\DelphiCompanion\mdc.log`.
 - Clearing a hotkey in Options disables that command's binding.
 
 ## Support and Contributing

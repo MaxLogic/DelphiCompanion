@@ -3,9 +3,7 @@
 interface
 
 uses
-  System.SysUtils,
-  System.Classes,
-  system.Generics.Defaults,
+  System.Classes, System.Generics.Defaults, System.SysUtils,
   MaxLogic.DelphiCompanion.Providers;
 
 type
@@ -24,26 +22,11 @@ type
 implementation
 
 uses
-  Winapi.Windows,
-  Winapi.Messages,
-  Winapi.CommCtrl,
-  vcl.ClipBrd,
-  System.Math,
-  System.StrUtils,
-  System.IniFiles,
-  vcl.graphics,
-  System.Generics.Collections,
-  System.IOUtils,
-  Vcl.Controls,
-  Vcl.ComCtrls,
-  Vcl.ExtCtrls,
-  Vcl.Forms,
-  Vcl.StdCtrls,
+  System.Generics.Collections, System.IOUtils, System.Math, system.strUtils,
+  Winapi.CommCtrl, Winapi.Messages, Winapi.Windows,
+  Vcl.ClipBrd, Vcl.ComCtrls, Vcl.Controls, Vcl.ExtCtrls, Vcl.Forms, Vcl.Graphics, Vcl.StdCtrls,
   ToolsAPI,
-  AutoFree,
-  maxLogic.StrUtils,
-  MaxLogic.DelphiCompanion.Settings,
-  MaxLogic.DelphiCompanion.IdeApi;
+  AutoFree, MaxLogic.DelphiCompanion.IdeApi, MaxLogic.DelphiCompanion.Settings, maxLogic.StrUtils;
 
 resourcestring
   SProjectsTitle = 'MaxLogic: Projects';
@@ -56,10 +39,6 @@ resourcestring
 const
   CWinKeyProjects = 'Picker.Projects';
   CWinKeyUnits    = 'Picker.Units';
-
-  CIniSectionPickerUnits = 'Picker.Units';
-  CIniKeyScope           = 'Scope';
-  CIniKeyIncSearchPaths  = 'IncludeSearchPaths';
 
 type
   TMdcUnitScope = (usOpenEditors, usCurrentProject, usProjectGroup);
@@ -85,6 +64,8 @@ type
 
     fUnitScope: TMdcUnitScope;
     fIncludeSearchPaths: Boolean;
+
+    fLoadingOptions: Boolean;
 
     fLastMainFocus: TWinControl;
     fWinKey: string;
@@ -126,6 +107,8 @@ type
     procedure SortItemsAlphabetically(
       var aItems: TArray<TMaxLogicPickItem>);
     procedure ForgetSelected;
+    procedure LoadProjectPickerPrefs;
+    procedure SaveProjectPickerPrefs;
   private
     // Project picker options (only when fIsProjects=True)
     fSortBox: TGroupBox;
@@ -361,29 +344,6 @@ begin
   Result := StringReplace(aText, '&', '', [rfReplaceAll]);
 end;
 
-function ScopeToStr(aScope: TMdcUnitScope): string;
-begin
-  case aScope of
-    usOpenEditors:    Result := 'OpenEditors';
-    usCurrentProject: Result := 'CurrentProject';
-    usProjectGroup:   Result := 'ProjectGroup';
-  else
-    Result := 'OpenEditors';
-  end;
-end;
-
-function StrToScope(const aText: string): TMdcUnitScope;
-var
-  s: string;
-begin
-  s := Trim(aText);
-  if SameText(s, 'CurrentProject') then
-    Exit(usCurrentProject);
-  if SameText(s, 'ProjectGroup') then
-    Exit(usProjectGroup);
-  Result := usOpenEditors;
-end;
-
 { TMaxLogicPickerForm }
 
 constructor TMaxLogicPickerForm.CreatePicker(aOwner: TComponent; const aTitle: string; aIsProjects: Boolean);
@@ -413,10 +373,17 @@ begin
 
   TMdcSettings.LoadWindowBounds(fWinKey, Self, lDefaultW, lDefaultH);
 
-  if not fIsProjects then
+  if fIsProjects then
   begin
+    LoadProjectPickerPrefs;
+  end else begin
     LoadUnitPickerPrefs;
-    UpdateScopeUi;
+    fLoadingOptions := True;
+    try
+      UpdateScopeUi;
+    finally
+      fLoadingOptions := False;
+    end;
   end;
 
   LoadItems;
@@ -773,8 +740,10 @@ procedure TMaxLogicPickerForm.FormClose(Sender: TObject; var Action: TCloseActio
 begin
   TMdcSettings.SaveWindowBounds(fWinKey, Self);
 
-  if not fIsProjects then
+  if fIsProjects then
   begin
+    SaveProjectPickerPrefs;
+  end else begin
     SaveUnitPickerPrefs;
   end;
 end;
@@ -1048,6 +1017,9 @@ begin
   if fIsProjects then
     Exit;
 
+  if fLoadingOptions then
+    Exit;
+
   if fRbOpen.Checked then
     fUnitScope := usOpenEditors
   else if fRbProject.Checked then
@@ -1063,6 +1035,7 @@ begin
   LoadItems;
   ApplyFilter;
 
+  SaveUnitPickerPrefs;
   RestoreMainFocus;
 end;
 
@@ -1167,48 +1140,23 @@ end;
 
 procedure TMaxLogicPickerForm.LoadUnitPickerPrefs;
 var
-  lIni: TMemIniFile;
-  gIni: IGarbo;
-  lName: string;
-  s: string;
+  lScope: Integer;
+  lInclude: Boolean;
 begin
   fUnitScope := usOpenEditors;
   fIncludeSearchPaths := False;
 
-  lName := TMdcSettings.GetConfigFileName;
-  if not FileExists(lName) then
-    Exit;
+  TMdcSettings.LoadUnitsPickerOptions(lScope, lInclude);
 
-  GC(lIni, TMemIniFile.Create(lName, TEncoding.UTF8), gIni);
-  lIni.CaseSensitive := False;
+  if (lScope >= Ord(Low(TMdcUnitScope))) and (lScope <= Ord(High(TMdcUnitScope))) then
+    fUnitScope := TMdcUnitScope(lScope);
 
-  s := lIni.ReadString(CIniSectionPickerUnits, CIniKeyScope, ScopeToStr(usOpenEditors));
-  fUnitScope := StrToScope(s);
-
-  fIncludeSearchPaths := lIni.ReadBool(CIniSectionPickerUnits, CIniKeyIncSearchPaths, False);
+  fIncludeSearchPaths := lInclude;
 end;
 
 procedure TMaxLogicPickerForm.SaveUnitPickerPrefs;
-var
-  lIni: TMemIniFile;
-  gIni: IGarbo;
-  lName: string;
-  lDir: string;
 begin
-  lName := TMdcSettings.GetConfigFileName;
-
-  lDir := ExtractFilePath(lName);
-  if lDir <> '' then
-  begin
-    ForceDirectories(lDir);
-  end;
-
-  GC(lIni, TMemIniFile.Create(lName, TEncoding.UTF8), gIni);
-  lIni.CaseSensitive := False;
-
-  lIni.WriteString(CIniSectionPickerUnits, CIniKeyScope, ScopeToStr(fUnitScope));
-  lIni.WriteBool(CIniSectionPickerUnits, CIniKeyIncSearchPaths, fIncludeSearchPaths);
-  lIni.UpdateFile;
+  TMdcSettings.SaveUnitsPickerOptions(Ord(fUnitScope), fIncludeSearchPaths);
 end;
 
 { TMaxLogicProjectPicker }
@@ -1266,11 +1214,15 @@ begin
   if not fIsProjects then
     Exit;
 
+  if fLoadingOptions then
+    Exit;
+
   // Next step: apply show/sort options to fItems
   // For now: just re-run filter to reflect caption/hide logic once you add it.
   LoadItems;
   ApplyFilter;
 
+  SaveProjectPickerPrefs;
   RestoreMainFocus;
 end;
 
@@ -1361,6 +1313,34 @@ begin
   fCbShowProjectGroups.OnClick := ProjectsOptionsClick;
   fCbShowFavorites.OnClick := ProjectsOptionsClick;
   fCbShowNonFavorites.OnClick := ProjectsOptionsClick;
+end;
+
+procedure TMaxLogicPickerForm.LoadProjectPickerPrefs;
+var
+  lSortAlpha: Boolean;
+  lFavoritesFirst: Boolean;
+begin
+  if not fIsProjects then
+    Exit;
+
+  TMdcSettings.LoadProjectsPickerOptions(lSortAlpha, lFavoritesFirst);
+
+  fLoadingOptions := True;
+  try
+    fRbSortAlpha.Checked := lSortAlpha;
+    fRbSortLast.Checked := not lSortAlpha;
+    fCbFavoriteFirst.Checked := lFavoritesFirst;
+  finally
+    fLoadingOptions := False;
+  end;
+end;
+
+procedure TMaxLogicPickerForm.SaveProjectPickerPrefs;
+begin
+  if not fIsProjects then
+    Exit;
+
+  TMdcSettings.SaveProjectsPickerOptions(fRbSortAlpha.Checked, fCbFavoriteFirst.Checked);
 end;
 
 

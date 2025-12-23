@@ -9,9 +9,6 @@
         <Projects Include="..\..\MaxLogicFoundation\Package\MaxLogicFoundationR.dproj">
             <Dependencies/>
         </Projects>
-        <Projects Include="..\..\..\mecMeister\_SVN\Kfzmeister_workCopy\MeisterApp\_Source\DelphiConfigResolver\projects\DelphiConfigResolver.dproj">
-            <Dependencies/>
-        </Projects>
     </ItemGroup>
     <ProjectExtensions>
         <Borland.Personality>Default.Personality.12</Borland.Personality>
@@ -38,23 +35,14 @@
     <Target Name="MaxLogicFoundationR:Make">
         <MSBuild Projects="..\..\MaxLogicFoundation\Package\MaxLogicFoundationR.dproj" Targets="Make"/>
     </Target>
-    <Target Name="DelphiConfigResolver">
-        <MSBuild Projects="..\..\..\mecMeister\_SVN\Kfzmeister_workCopy\MeisterApp\_Source\DelphiConfigResolver\projects\DelphiConfigResolver.dproj"/>
-    </Target>
-    <Target Name="DelphiConfigResolver:Clean">
-        <MSBuild Projects="..\..\..\mecMeister\_SVN\Kfzmeister_workCopy\MeisterApp\_Source\DelphiConfigResolver\projects\DelphiConfigResolver.dproj" Targets="Clean"/>
-    </Target>
-    <Target Name="DelphiConfigResolver:Make">
-        <MSBuild Projects="..\..\..\mecMeister\_SVN\Kfzmeister_workCopy\MeisterApp\_Source\DelphiConfigResolver\projects\DelphiConfigResolver.dproj" Targets="Make"/>
-    </Target>
     <Target Name="Build">
-        <CallTarget Targets="MaxLogicDelphiCompanion;MaxLogicFoundationR;DelphiConfigResolver"/>
+        <CallTarget Targets="MaxLogicDelphiCompanion;MaxLogicFoundationR"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="MaxLogicDelphiCompanion:Clean;MaxLogicFoundationR:Clean;DelphiConfigResolver:Clean"/>
+        <CallTarget Targets="MaxLogicDelphiCompanion:Clean;MaxLogicFoundationR:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="MaxLogicDelphiCompanion:Make;MaxLogicFoundationR:Make;DelphiConfigResolver:Make"/>
+        <CallTarget Targets="MaxLogicDelphiCompanion:Make;MaxLogicFoundationR:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>

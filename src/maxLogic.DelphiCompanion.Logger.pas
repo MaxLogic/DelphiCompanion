@@ -30,7 +30,7 @@ procedure MdcDumpRttiMembers(const aObj: TObject; const aTitle: string; const aO
 implementation
 
 uses
-  System.Math, System.IOUtils, System.Rtti, System.SyncObjs, System.SysUtils, System.TypInfo, System.StrUtils,
+  System.IOUtils, System.Math, System.Rtti, System.StrUtils, System.SyncObjs, System.SysUtils, System.TypInfo,
   MaxLogic.ioUtils,
   maxLogic.DelphiCompanion.Settings;
 
@@ -43,7 +43,7 @@ begin
     Exit;
 
   try
-    ForceDirectories('F:\tmp');
+    ForceDirectories(ExtractFilePath(GMdcLogFile));
     TFile.AppendAllText(
       GMdcLogFile,
       FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', now) + ' [Problems] ' + aMsg + sLineBreak,
@@ -387,8 +387,7 @@ end;
 
 initialization
   TMdcSettings.LoadLoggingEnabled(GMdcLoggingEnabled);
-  GMdcLogFile := CombinePath([ GetEnvironmentVariable('AppData'),
-    'MaxLogic', 'mdc.log']);
+  GMdcLogFile := TPath.Combine(TMdcSettings.GetConfigDir, 'mdc.log');
 
 end.
 

@@ -9,6 +9,7 @@ uses
 type
   TMdcSettings = class
   public
+    class function GetConfigDir: string; static;
     class function GetConfigFileName: string; static;
 
     class function DefaultProjects: TShortCut; static;
@@ -22,6 +23,9 @@ type
 
     class procedure LoadUnitsPickerOptions(out aScope: Integer; out aIncludeSearchPaths: Boolean); static;
     class procedure SaveUnitsPickerOptions(aScope: Integer; aIncludeSearchPaths: Boolean); static;
+
+    class procedure LoadProjectsPickerOptions(out aSortAlpha: Boolean; out aFavoritesFirst: Boolean); static;
+    class procedure SaveProjectsPickerOptions(aSortAlpha: Boolean; aFavoritesFirst: Boolean); static;
 
     class procedure LoadCompileSounds(out aEnabled: Boolean; out aOkSound: string; out aFailSound: string); static;
     class procedure SaveCompileSounds(aEnabled: Boolean; const aOkSound: string; const aFailSound: string); static;
@@ -39,9 +43,7 @@ type
 implementation
 
 uses
-  System.SysUtils,
-  System.IOUtils,
-  System.IniFiles,
+  System.IniFiles, System.IOUtils, System.SysUtils,
   Vcl.Menus,
   AutoFree;
 
@@ -60,9 +62,14 @@ const
   CDefaultLoggingEnabled = True;
 
 
-  CIniSectionUnitsPicker = 'UnitsPicker';
+  CIniSectionUnitsPicker = 'UnitsPicker'; // legacy
+  CIniSectionPickerUnits = 'Picker.Units';
   CIniKeyScope = 'Scope';
   CIniKeyIncludeSearchPaths = 'IncludeSearchPaths';
+
+  CIniSectionProjectsPicker = 'Picker.Projects';
+  CIniKeyProjectsSortAlpha = 'SortAlpha';
+  CIniKeyProjectsFavoritesFirst = 'FavoritesFirst';
 
 
   CIniSectionCompileSounds = 'CompileSounds';
@@ -219,6 +226,48 @@ var
   lIni: TMemIniFile;
   g: IGarbo;
   lIniName: string;
+  s: string;
+
+  function TryReadString(const aSection: string; const aKey: string; out aValue: string): Boolean;
+  begin
+    aValue := lIni.ReadString(aSection, aKey, CMissing);
+    Result := (aValue <> CMissing);
+  end;
+
+  function ScopeFromText(const aText: string): Integer;
+  begin
+    if SameText(aText, 'CurrentProject') then
+      Exit(1);
+    if SameText(aText, 'ProjectGroup') then
+      Exit(2);
+    Result := 0;
+  end;
+
+  function BoolFromText(const aText: string; aDefault: Boolean): Boolean;
+  begin
+    if (SameText(aText, '1')) or (SameText(aText, 'True')) then
+      Exit(True);
+    if (SameText(aText, '0')) or (SameText(aText, 'False')) then
+      Exit(False);
+    Result := aDefault;
+  end;
+
+  procedure ReadScope;
+  begin
+    if TryReadString(CIniSectionPickerUnits, CIniKeyScope, s) or
+       TryReadString(CIniSectionUnitsPicker, CIniKeyScope, s) then
+    begin
+      if not TryStrToInt(s, aScope) then
+        aScope := ScopeFromText(s);
+    end;
+  end;
+
+  procedure ReadIncludeSearchPaths;
+  begin
+    if TryReadString(CIniSectionPickerUnits, CIniKeyIncludeSearchPaths, s) or
+       TryReadString(CIniSectionUnitsPicker, CIniKeyIncludeSearchPaths, s) then
+      aIncludeSearchPaths := BoolFromText(s, aIncludeSearchPaths);
+  end;
 begin
   aScope := 0; // default: Open editors
   aIncludeSearchPaths := False;
@@ -230,11 +279,61 @@ begin
   GC(lIni, TMemIniFile.Create(lIniName, TEncoding.UTF8), g);
   lIni.CaseSensitive := False;
 
-  aScope := lIni.ReadInteger(CIniSectionUnitsPicker, CIniKeyScope, aScope);
-  aIncludeSearchPaths := lIni.ReadBool(CIniSectionUnitsPicker, CIniKeyIncludeSearchPaths, aIncludeSearchPaths);
+  ReadScope;
+  ReadIncludeSearchPaths;
 end;
 
 class procedure TMdcSettings.SaveUnitsPickerOptions(aScope: Integer; aIncludeSearchPaths: Boolean);
+var
+  lIni: TMemIniFile;
+  g: IGarbo;
+  lIniName: string;
+  lDir: string;
+
+  function ScopeToText(aScopeValue: Integer): string;
+  begin
+    case aScopeValue of
+      1: Result := 'CurrentProject';
+      2: Result := 'ProjectGroup';
+    else
+      Result := 'OpenEditors';
+    end;
+  end;
+begin
+  lIniName := GetConfigFileName;
+  lDir := ExtractFilePath(lIniName);
+  if lDir <> '' then
+    ForceDirectories(lDir);
+
+  GC(lIni, TMemIniFile.Create(lIniName, TEncoding.UTF8), g);
+  lIni.CaseSensitive := False;
+
+  lIni.WriteString(CIniSectionPickerUnits, CIniKeyScope, ScopeToText(aScope));
+  lIni.WriteBool(CIniSectionPickerUnits, CIniKeyIncludeSearchPaths, aIncludeSearchPaths);
+  lIni.UpdateFile;
+end;
+
+class procedure TMdcSettings.LoadProjectsPickerOptions(out aSortAlpha: Boolean; out aFavoritesFirst: Boolean);
+var
+  lIni: TMemIniFile;
+  g: IGarbo;
+  lIniName: string;
+begin
+  aSortAlpha := False;
+  aFavoritesFirst := True;
+
+  lIniName := GetConfigFileName;
+  if not FileExists(lIniName) then
+    Exit;
+
+  GC(lIni, TMemIniFile.Create(lIniName, TEncoding.UTF8), g);
+  lIni.CaseSensitive := False;
+
+  aSortAlpha := lIni.ReadBool(CIniSectionProjectsPicker, CIniKeyProjectsSortAlpha, aSortAlpha);
+  aFavoritesFirst := lIni.ReadBool(CIniSectionProjectsPicker, CIniKeyProjectsFavoritesFirst, aFavoritesFirst);
+end;
+
+class procedure TMdcSettings.SaveProjectsPickerOptions(aSortAlpha: Boolean; aFavoritesFirst: Boolean);
 var
   lIni: TMemIniFile;
   g: IGarbo;
@@ -249,11 +348,10 @@ begin
   GC(lIni, TMemIniFile.Create(lIniName, TEncoding.UTF8), g);
   lIni.CaseSensitive := False;
 
-  lIni.WriteInteger(CIniSectionUnitsPicker, CIniKeyScope, aScope);
-  lIni.WriteBool(CIniSectionUnitsPicker, CIniKeyIncludeSearchPaths, aIncludeSearchPaths);
+  lIni.WriteBool(CIniSectionProjectsPicker, CIniKeyProjectsSortAlpha, aSortAlpha);
+  lIni.WriteBool(CIniSectionProjectsPicker, CIniKeyProjectsFavoritesFirst, aFavoritesFirst);
   lIni.UpdateFile;
 end;
-
 
 
 class function TMdcSettings.DefaultProjects: TShortCut;
@@ -266,7 +364,7 @@ begin
   Result := TextToShortCut(CDefaultUnitsText);
 end;
 
-class function TMdcSettings.GetConfigFileName: string;
+class function TMdcSettings.GetConfigDir: string;
 var
   lBase: string;
 begin
@@ -276,7 +374,12 @@ begin
     lBase := TPath.GetHomePath;
   end;
 
-  Result := TPath.Combine(TPath.Combine(lBase, 'MaxLogic'), 'MDC.ini');
+  Result := TPath.Combine(TPath.Combine(lBase, 'MaxLogic'), 'DelphiCompanion');
+end;
+
+class function TMdcSettings.GetConfigFileName: string;
+begin
+  Result := TPath.Combine(GetConfigDir, 'MDC.ini');
 end;
 
 
