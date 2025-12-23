@@ -31,10 +31,11 @@ implementation
 
 uses
   System.Math, System.IOUtils, System.Rtti, System.SyncObjs, System.SysUtils, System.TypInfo, System.StrUtils,
+  MaxLogic.ioUtils,
   maxLogic.DelphiCompanion.Settings;
 
-const
-  CMdcLogFile = 'F:\tmp\mdc.log';
+var
+  GMdcLogFile : String;
 
 procedure MdcLog(const aMsg: string);
 begin
@@ -44,7 +45,7 @@ begin
   try
     ForceDirectories('F:\tmp');
     TFile.AppendAllText(
-      CMdcLogFile,
+      GMdcLogFile,
       FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', now) + ' [Problems] ' + aMsg + sLineBreak,
       TEncoding.UTF8);
   except
@@ -386,6 +387,8 @@ end;
 
 initialization
   TMdcSettings.LoadLoggingEnabled(GMdcLoggingEnabled);
+  GMdcLogFile := CombinePath([ GetEnvironmentVariable('AppData'),
+    'MaxLogic', 'mdc.log']);
 
 end.
 

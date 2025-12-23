@@ -1,6 +1,6 @@
 # MaxLogic Delphi Companion
 
-MaxLogic Delphi Companion (MDC) is a RAD Studio Delphi 12 IDE add-in focused on fast navigation and build feedback. It provides pickers for projects and units, a problems dialog for Error Insight/build messages, and a small options dialog for shortcuts and behavior.
+MaxLogic Delphi Companion (MDC) is a RAD Studio Delphi 12+ IDE add-in focused on fast navigation and build feedback. It provides pickers for projects and units, a problems dialog for Error Insight/build messages, and a small options dialog for shortcuts and behavior.
 
 ## Features
 
@@ -20,9 +20,9 @@ MaxLogic Delphi Companion (MDC) is a RAD Studio Delphi 12 IDE add-in focused on 
 - Everything-style filtering; Enter or double-click opens the unit.
 - `Ctrl+C` copies selected unit paths as Markdown.
 
-### Problems Dialog (Focus Error Insight)
+### Problems Dialog 
 
-- Default shortcut: `Ctrl+Shift+E` (configurable).
+- Default shortcut: `Ctrl+Shift+F1` (configurable).
 - Shows Error Insight issues and build errors/warnings in separate lists.
 - Double-click (or Enter) jumps to the line in the editor.
 - `F1/F2/F3` focuses a list, `F5` refreshes, `Esc` closes.
@@ -49,12 +49,12 @@ MaxLogic Delphi Companion (MDC) is a RAD Studio Delphi 12 IDE add-in focused on 
 
 ## Notes
 
-- Logging (when enabled) is written to `F:\tmp\mdc.log`.
+- Logging (when enabled) is written to `%AppData%\MaxLogic\mdc.log`.
 - Clearing a hotkey in Options disables that command's binding.
 
 ## Support and Contributing
 
-Please report issues or suggestions in the [MaxLogic repository](https://github.com/maxlogic). Contributions are welcome; keep changes Delphi 12 compatible and follow the conventions in `spec.md`.
+Please report issues or suggestions in the [MaxLogic repository](https://github.com/maxlogic). Contributions are welcome.
 
 ## License
 
