@@ -15,7 +15,7 @@ type
 
 
 var
-  GMdcLoggingEnabled: Boolean = false;
+  GMdcLoggingEnabled: Boolean = True;
 
 
 procedure MdcLog(const aMsg: string);
@@ -25,11 +25,12 @@ procedure MdcDumpControlParentChain(const aCtrl: TControl; const aTitle: string)
 procedure MdcDumpPublishedProperties(const aObj: TObject; const aTitle: string; const aMaxCount: integer = 300);
 procedure MdcDumpRttiMethods(const aObj: TObject; const aTitle: string; const aMaxCount: integer = 300);
 procedure MdcDumpObjectDiagnostics(const aObj: TObject; const aTitle: string);
+procedure MdcDumpRttiMembers(const aObj: TObject; const aTitle: string; const aOpts: TMdcRttiDumpOptions);
 
 implementation
 
 uses
-  System.Math, System.IOUtils, System.Rtti, System.SyncObjs, System.SysUtils, System.TypInfo,
+  System.Math, System.IOUtils, System.Rtti, System.SyncObjs, System.SysUtils, System.TypInfo, System.StrUtils,
   maxLogic.DelphiCompanion.Settings;
 
 const
@@ -274,6 +275,113 @@ begin
   MdcDumpPublishedProperties(aObj, aTitle);
   MdcDumpRttiMethods(aObj, aTitle);
   MdcLog(Format('%s: ===== DIAGNOSTICS END =====', [aTitle]));
+end;
+
+function MdcIsInterestingMemberName(const aName: string): Boolean;
+begin
+  Result :=
+    ContainsText(aName, 'Text') or
+    ContainsText(aName, 'Node') or
+    ContainsText(aName, 'Column') or
+    ContainsText(aName, 'Content') or
+    ContainsText(aName, 'Hint') or
+    ContainsText(aName, 'Get');
+end;
+
+procedure MdcDumpRttiMembers(const aObj: TObject; const aTitle: string; const aOpts: TMdcRttiDumpOptions);
+var
+  lCtx: TRttiContext;
+  lCls: TClass;
+  lType: TRttiType;
+  lProp: TRttiProperty;
+  lMeth: TRttiMethod;
+  lPropCount: Integer;
+  lMethCount: Integer;
+  lTotalProps: Integer;
+  lTotalMeths: Integer;
+begin
+  if not GMdcLoggingEnabled then
+    Exit;
+
+  if aObj = nil then
+    Exit;
+
+  MdcLog(aTitle + ': RTTI dump begin');
+
+  lCtx := TRttiContext.Create;
+  try
+    lTotalProps := 0;
+    lTotalMeths := 0;
+
+    lCls := aObj.ClassType;
+    while lCls <> nil do
+    begin
+      lType := lCtx.GetType(lCls);
+      if lType = nil then
+      begin
+        lCls := lCls.ClassParent;
+        Continue;
+      end;
+
+      var lTypeName: string;
+      lTypeName := lType.Name;
+      try
+        lTypeName := lType.QualifiedName;
+      except
+        on E: Exception do
+          MdcLog(Format('%s: RTTI type qualified name failed: %s: %s', [aTitle, E.ClassName, E.Message]));
+      end;
+
+      MdcLog(Format('%s: RTTI type=%s', [aTitle, lTypeName]));
+
+      lPropCount := 0;
+      for lProp in lType.GetProperties do
+      begin
+        if aOpts.OnlyInteresting and (not MdcIsInterestingMemberName(lProp.Name)) then
+          Continue;
+
+        Inc(lPropCount);
+        Inc(lTotalProps);
+
+        if (aOpts.MaxProps > 0) and (lPropCount > aOpts.MaxProps) then
+        begin
+          MdcLog(Format('%s: (props truncated for %s)', [aTitle, lType.Name]));
+          Break;
+        end;
+
+        MdcLog(Format('%s:  prop %s: %s  readable=%s writable=%s',
+          [aTitle, lProp.Name, lProp.PropertyType.Name,
+           BoolToStr(lProp.IsReadable, True),
+           BoolToStr(lProp.IsWritable, True)]));
+      end;
+
+      lMethCount := 0;
+      for lMeth in lType.GetMethods do
+      begin
+        if aOpts.OnlyInteresting and (not MdcIsInterestingMemberName(lMeth.Name)) then
+          Continue;
+
+        Inc(lMethCount);
+        Inc(lTotalMeths);
+
+        if (aOpts.MaxMethods > 0) and (lMethCount > aOpts.MaxMethods) then
+        begin
+          MdcLog(Format('%s: (methods truncated for %s)', [aTitle, lType.Name]));
+          Break;
+        end;
+
+        MdcLog(Format('%s:  meth %s  kind=%s  params=%d',
+          [aTitle, lMeth.Name, GetEnumName(TypeInfo(TMethodKind), Ord(lMeth.MethodKind)),
+           Length(lMeth.GetParameters)]));
+      end;
+
+      lCls := lCls.ClassParent;
+    end;
+
+    MdcLog(Format('%s: RTTI dump end (props=%d, methods=%d)', [aTitle, lTotalProps, lTotalMeths]));
+  finally
+    lCtx.Free;
+  end;
 end;
 
 initialization

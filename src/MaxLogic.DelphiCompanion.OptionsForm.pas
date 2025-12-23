@@ -256,6 +256,7 @@ begin
   lOk.ModalResult := mrOk;
   lOk.Default := True;
 
+  lForm.ActiveControl:= lOk;
   Result := (lForm.ShowModal = mrOk);
   if Result then
   begin

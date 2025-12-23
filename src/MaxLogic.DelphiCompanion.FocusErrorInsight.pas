@@ -3,10 +3,10 @@
 interface
 
 uses
-  winApi.Windows, winApi.CommCtrl, winApi.Messages,
-  System.Classes, System.SysUtils,
-  vcl.Menus, vcl.ComCtrls,
-  ToolsAPI, System.Rtti, System.TypInfo;
+  System.Classes, System.Types,
+  Winapi.CommCtrl, Winapi.Messages, Winapi.Windows,
+  Vcl.ComCtrls, Vcl.Forms, Vcl.StdCtrls,
+  ToolsAPI;
 
 type
   TMdcFocusErrorInsight = class
@@ -18,18 +18,11 @@ type
 implementation
 
 uses
-  System.generics.collections, System.Math,
-  System.StrUtils,
-  System.DateUtils,
-  System.IOUtils,
-  vcl.Forms,
-  vcl.Controls,
-  vcl.StdCtrls,
-  vcl.ExtCtrls,
-  vcl.ClipBrd,
-  vcl.Graphics,
-  AutoFree,
-  maxLogic.DelphiCompanion.Settings, maxLogic.DelphiCompanion.IdeUiInspector, maxLogic.DelphiCompanion.Logger;
+  System.IOUtils, System.Rtti, System.StrUtils, System.SysUtils, System.TypInfo,
+  Vcl.ClipBrd, Vcl.Controls, Vcl.ExtCtrls, Vcl.Graphics,
+  AutoFree, maxLogic.DelphiCompanion.IdeApi, maxLogic.DelphiCompanion.IdeUiInspector,
+  maxLogic.DelphiCompanion.Logger, maxLogic.DelphiCompanion.Providers,
+  maxLogic.DelphiCompanion.Settings;
 
 type
   PHWND = ^hwnd;
@@ -42,8 +35,8 @@ type
     kind: TMdcProblemKind;
     Text: string;
     FileName: string;
-    LineNo: integer; // 1-based
-    ColNo: integer; // 1-based
+    LineNo: Integer; // 1-based
+    ColNo: Integer; // 1-based
   end;
 
   TMdcProblemsForm = class(TForm)
@@ -54,16 +47,23 @@ type
     fLbBuildErrors: TListBox;
     fLbBuildWarnings: TListBox;
 
+    fLblEi: TStaticText;
+    fLblErr: TStaticText;
+    fLblWarn: TStaticText;
+
     fBtnRefresh: TButton;
     fBtnClose: TButton;
 
     fLastEiSignature: string;
-    fEiRefreshing: boolean;
+    fEiRefreshing: Boolean;
 
-    fHooked: boolean;
+    fHooked: Boolean;
 
     procedure TimerTick(Sender: TObject);
+    procedure FormClose(aSender: TObject; var aAction: TCloseAction);
     procedure FormDestroy(Sender: TObject);
+    procedure FormResize(aSender: TObject);
+    procedure UpdateLayout;
 
     procedure LbDblClick(Sender: TObject);
     procedure LbKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
@@ -79,20 +79,23 @@ type
     procedure RefreshErrorInsight;
     procedure RefreshBuildMessages;
 
-    function TryGetActiveFileName(out aFileName: string): boolean;
-    function TryCollectModuleErrors(const aFileName: string; out aErrors: TOTAErrors): boolean;
+    function TryGetActiveFileName(out aFileName: string): Boolean;
+    function TryCollectModuleErrors(const aFileName: string; out aErrors: TOTAErrors): Boolean;
 
     function BuildEiSignature(const aErrors: TOTAErrors): string;
+
+    function TryResolveFileName(const aFileName: string; out aResolved: string): Boolean;
 
     function FindMessageViewForm: TForm;
     procedure EnsureMessageViewShown;
 
-    function TryCopyBuildMessagesToClipboard(out aText: string): boolean;
-    function TryParseBuildLine(const aLine: string; out aItem: TMdcProblemItem): boolean;
+    function TryCopyBuildMessagesToClipboard(out aText: string): Boolean;
+    function TryParseBuildLine(const aLine: string; out aItem: TMdcProblemItem): Boolean;
 
     procedure PopulateFromBuildText(const aText: string);
 
-    function AppHook(var aMsg: TMessage): boolean;
+    function AppHook(var aMsg: TMessage): Boolean;
+
 
     class procedure ShowSingleton;
   public
@@ -112,8 +115,11 @@ type
     function GetName: string;
   end;
 
+const
+  CWinKeyProblems = 'Problems.Dialog';
+
 var
-  GBindingIndex: integer = -1;
+  GBindingIndex: Integer = -1;
   GBindingIntf: IOTAKeyboardBinding = nil;
   GProblemsForm: TMdcProblemsForm = nil;
 
@@ -140,7 +146,7 @@ begin
   SendInput(length(lInputs), lInputs[0], SizeOf(TInput));
 end;
 
-function SafeInt(const s: string; const aDefault: integer = 0): integer;
+function SafeInt(const s: string; const aDefault: Integer = 0): Integer;
 begin
   if not TryStrToInt(Trim(s), Result) then
     Result := aDefault;
@@ -149,105 +155,70 @@ end;
 { TMdcProblemsForm }
 
 constructor TMdcProblemsForm.Create(aOwner: TComponent);
-var
-  lLblEi, lLblErr, lLblWarn: TStaticText;
-
-  function SV(aV: integer): integer;
-  begin
-    Result := ScaleValue(aV);
-  end;
-
 begin
   inherited CreateNew(aOwner);
 
   OnDestroy := FormDestroy;
+  OnClose := FormClose;
+  OnResize := FormResize;
   caption := 'MaxLogic Delphi Companion - Problems';
   BorderStyle := bsSizeable;
-  Position := poScreenCenter;
-  Width := SV(1100);
-  Height := SV(520);
 
   Font.Name := 'Segoe UI';
   Font.Size := 10;
 
+  TMdcSettings.LoadWindowBounds(CWinKeyProblems, Self, ScaleValue(1100), ScaleValue(520));
+
   // --- LISTS ---
   fLbErrorInsight := TListBox.Create(self);
   fLbErrorInsight.Parent := self;
-  fLbErrorInsight.Left := SV(10);
-  fLbErrorInsight.Top := SV(35);
-  fLbErrorInsight.Width := (ClientWidth - SV(40)) div 3;
-  fLbErrorInsight.Height := ClientHeight - SV(90);
   fLbErrorInsight.Anchors := [akLeft, akTop, akBottom];
   fLbErrorInsight.IntegralHeight := False;
   fLbErrorInsight.OnDblClick := LbDblClick;
   fLbErrorInsight.OnKeyDown := LbKeyDown;
   fLbErrorInsight.TabStop := True;
 
-  lLblEi := TStaticText.Create(self);
-  lLblEi.Parent := self;
-  lLblEi.Left := fLbErrorInsight.Left;
-  lLblEi.Top := SV(10);
-  lLblEi.Width := fLbErrorInsight.Width;
-  lLblEi.Height := SV(18);
-  lLblEi.caption := 'Error Insight  (F1)';
-  lLblEi.ShowHint := True;
-  lLblEi.hint := 'Hotkey: F1 focuses this list';
-  lLblEi.FocusControl := fLbErrorInsight;
+  fLblEi := TStaticText.Create(self);
+  fLblEi.Parent := self;
+  fLblEi.caption := '&Error Insight  (F1)';
+  fLblEi.ShowHint := True;
+  fLblEi.hint := 'Hotkey: F1 focuses this list';
+  fLblEi.FocusControl := fLbErrorInsight;
 
   fLbBuildErrors := TListBox.Create(self);
   fLbBuildErrors.Parent := self;
-  fLbBuildErrors.Left := fLbErrorInsight.Left + fLbErrorInsight.Width + SV(10);
-  fLbBuildErrors.Top := fLbErrorInsight.Top;
-  fLbBuildErrors.Width := fLbErrorInsight.Width;
-  fLbBuildErrors.Height := fLbErrorInsight.Height;
   fLbBuildErrors.Anchors := [akLeft, akTop, akBottom];
   fLbBuildErrors.IntegralHeight := False;
   fLbBuildErrors.OnDblClick := LbDblClick;
   fLbBuildErrors.OnKeyDown := LbKeyDown;
   fLbBuildErrors.TabStop := True;
 
-  lLblErr := TStaticText.Create(self);
-  lLblErr.Parent := self;
-  lLblErr.Left := fLbBuildErrors.Left;
-  lLblErr.Top := lLblEi.Top;
-  lLblErr.Width := fLbBuildErrors.Width;
-  lLblErr.Height := lLblEi.Height;
-  lLblErr.caption := 'Build Errors  (F2)';
-  lLblErr.ShowHint := True;
-  lLblErr.hint := 'Hotkey: F2 focuses this list';
-  lLblErr.FocusControl := fLbBuildErrors;
+  fLblErr := TStaticText.Create(self);
+  fLblErr.Parent := self;
+  fLblErr.caption := 'Build E&rrors  (F2)';
+  fLblErr.ShowHint := True;
+  fLblErr.hint := 'Hotkey: F2 focuses this list';
+  fLblErr.FocusControl := fLbBuildErrors;
 
   fLbBuildWarnings := TListBox.Create(self);
   fLbBuildWarnings.Parent := self;
-  fLbBuildWarnings.Left := fLbBuildErrors.Left + fLbBuildErrors.Width + SV(10);
-  fLbBuildWarnings.Top := fLbErrorInsight.Top;
-  fLbBuildWarnings.Width := fLbErrorInsight.Width;
-  fLbBuildWarnings.Height := fLbErrorInsight.Height;
   fLbBuildWarnings.Anchors := [akLeft, akTop, akBottom, akRight];
   fLbBuildWarnings.IntegralHeight := False;
   fLbBuildWarnings.OnDblClick := LbDblClick;
   fLbBuildWarnings.OnKeyDown := LbKeyDown;
   fLbBuildWarnings.TabStop := True;
 
-  lLblWarn := TStaticText.Create(self);
-  lLblWarn.Parent := self;
-  lLblWarn.Left := fLbBuildWarnings.Left;
-  lLblWarn.Top := lLblEi.Top;
-  lLblWarn.Width := fLbBuildWarnings.Width;
-  lLblWarn.Height := lLblEi.Height;
-  lLblWarn.caption := 'Build Warnings  (F3)';
-  lLblWarn.ShowHint := True;
-  lLblWarn.hint := 'Hotkey: F3 focuses this list';
-  lLblWarn.FocusControl := fLbBuildWarnings;
+  fLblWarn := TStaticText.Create(self);
+  fLblWarn.Parent := self;
+  fLblWarn.caption := 'Build &Warnings  (F3)';
+  fLblWarn.ShowHint := True;
+  fLblWarn.hint := 'Hotkey: F3 focuses this list';
+  fLblWarn.FocusControl := fLbBuildWarnings;
 
   // --- BUTTONS ---
   fBtnRefresh := TButton.Create(self);
   fBtnRefresh.Parent := self;
   fBtnRefresh.caption := 'Refresh (F5)';
-  fBtnRefresh.Left := SV(10);
-  fBtnRefresh.Top := ClientHeight - SV(45);
-  fBtnRefresh.Width := SV(140);
-  fBtnRefresh.Height := SV(30);
   fBtnRefresh.Anchors := [akLeft, akBottom];
   fBtnRefresh.OnClick := BtnRefreshClick;
   fBtnRefresh.OnKeyDown := LbKeyDown;
@@ -255,10 +226,6 @@ begin
   fBtnClose := TButton.Create(self);
   fBtnClose.Parent := self;
   fBtnClose.caption := 'Close (Esc)';
-  fBtnClose.Left := fBtnRefresh.Left + fBtnRefresh.Width + SV(10);
-  fBtnClose.Top := fBtnRefresh.Top;
-  fBtnClose.Width := SV(140);
-  fBtnClose.Height := fBtnRefresh.Height;
   fBtnClose.Anchors := [akLeft, akBottom];
   fBtnClose.OnClick := BtnCloseClick;
   fBtnClose.OnKeyDown := LbKeyDown;
@@ -272,6 +239,7 @@ begin
   KeyPreview := True;
   OnKeyDown := LbKeyDown;
 
+  UpdateLayout;
   ActiveControl := fLbErrorInsight;
 
   // Suppress IDE stealing our function keys (F3 search, etc.)
@@ -302,7 +270,8 @@ begin
       MdcLog('Destroy: UnhookMainWindow=OK');
     except
       on e: Exception do
-        MdcLog('Destroy: UnhookMainWindow=FAILED ' + e.classname + ': ' + e.Message);
+        if GMdcLoggingEnabled then
+          MdcLog('Destroy: UnhookMainWindow=FAILED ' + e.ClassName + ': ' + e.Message);
     end;
     fHooked := False;
   end;
@@ -349,6 +318,7 @@ end;
 procedure TMdcProblemsForm.FormDestroy(Sender: TObject);
 begin
   MdcLog('FormDestroy');
+  TMdcSettings.SaveWindowBounds(CWinKeyProblems, Self);
   try
     if fTimer <> nil then
       fTimer.Enabled := False;
@@ -358,7 +328,74 @@ begin
   GProblemsForm := nil;
 end;
 
-function TMdcProblemsForm.AppHook(var aMsg: TMessage): boolean;
+procedure TMdcProblemsForm.FormClose(aSender: TObject; var aAction: TCloseAction);
+begin
+  TMdcSettings.SaveWindowBounds(CWinKeyProblems, Self);
+end;
+
+procedure TMdcProblemsForm.FormResize(aSender: TObject);
+begin
+  UpdateLayout;
+end;
+
+procedure TMdcProblemsForm.UpdateLayout;
+var
+  lMargin, lGap, lLabelTop, lLabelHeight: Integer;
+  lListTop, lListWidth, lListHeight: Integer;
+  lButtonsTop, lButtonHeight, lButtonWidth: Integer;
+
+  function SV(v: Integer): Integer;
+  begin
+    Result := ScaleValue(v);
+  end;
+
+begin
+  if (fLbErrorInsight = nil) or (fLbBuildErrors = nil) or (fLbBuildWarnings = nil) or
+     (fLblEi = nil) or (fLblErr = nil) or (fLblWarn = nil) or
+     (fBtnRefresh = nil) or (fBtnClose = nil) then
+    Exit;
+
+  lMargin := SV(10);
+  lGap := SV(10);
+  lLabelTop := SV(10);
+  lLabelHeight := SV(18);
+  lListTop := SV(35);
+  lButtonHeight := SV(30);
+  lButtonWidth := SV(140);
+  lButtonsTop := ClientHeight - SV(45);
+
+  lListHeight := lButtonsTop - lListTop - lGap;
+  if lListHeight < SV(1) then
+    lListHeight := SV(1);
+
+  lListWidth := (ClientWidth - (lMargin * 2) - (lGap * 2)) div 3;
+  if lListWidth < SV(1) then
+    lListWidth := SV(1);
+
+  fLbErrorInsight.SetBounds(lMargin, lListTop, lListWidth, lListHeight);
+  fLbBuildErrors.SetBounds(fLbErrorInsight.Left + lListWidth + lGap, lListTop, lListWidth, lListHeight);
+  fLbBuildWarnings.SetBounds(fLbBuildErrors.Left + lListWidth + lGap, lListTop, lListWidth, lListHeight);
+
+  fLblEi.SetBounds(fLbErrorInsight.Left, lLabelTop, lListWidth, lLabelHeight);
+  fLblErr.SetBounds(fLbBuildErrors.Left, lLabelTop, lListWidth, lLabelHeight);
+  fLblWarn.SetBounds(fLbBuildWarnings.Left, lLabelTop, lListWidth, lLabelHeight);
+
+  fBtnRefresh.SetBounds(lMargin, lButtonsTop, lButtonWidth, lButtonHeight);
+  fBtnClose.SetBounds(fBtnRefresh.Left + fBtnRefresh.Width + lGap, lButtonsTop, lButtonWidth, lButtonHeight);
+end;
+
+procedure TMdcProblemsForm.TimerTick(Sender: TObject);
+begin
+  RefreshErrorInsight;
+end;
+
+procedure TMdcProblemsForm.BtnRefreshClick(Sender: TObject);
+begin
+  RefreshAll;
+end;
+
+
+function TMdcProblemsForm.AppHook(var aMsg: TMessage): Boolean;
 begin
   Result := False;
 
@@ -366,7 +403,8 @@ begin
   if Screen.ActiveForm <> self then
     exit;
 
-  if (aMsg.msg = WM_KEYDOWN) or (aMsg.msg = WM_SYSKEYDOWN) then
+  if (aMsg.msg = WM_KEYDOWN) or (aMsg.msg = WM_SYSKEYDOWN)
+    or (aMsg.msg = WM_KEYUP) or (aMsg.msg = WM_SYSKEYUP) then
   begin
     case aMsg.WParam of
       VK_F1:
@@ -392,14 +430,16 @@ begin
 
       VK_F5:
         begin
-          RefreshAll;
+          if (aMsg.msg = WM_KEYDOWN) or (aMsg.msg = WM_SYSKEYDOWN) then
+            RefreshAll;
           Result := True;
           exit;
         end;
 
       VK_ESCAPE:
         begin
-          Close;
+          if (aMsg.msg = WM_KEYUP) or (aMsg.msg = WM_SYSKEYUP) then
+            Close;
           Result := True;
           exit;
         end;
@@ -407,15 +447,6 @@ begin
   end;
 end;
 
-procedure TMdcProblemsForm.TimerTick(Sender: TObject);
-begin
-  RefreshErrorInsight;
-end;
-
-procedure TMdcProblemsForm.BtnRefreshClick(Sender: TObject);
-begin
-  RefreshAll;
-end;
 
 procedure TMdcProblemsForm.BtnCloseClick(Sender: TObject);
 begin
@@ -487,7 +518,7 @@ end;
 
 procedure TMdcProblemsForm.ClearListBoxItems(aLb: TListBox);
 var
-  i: integer;
+  i: Integer;
 begin
   if aLb = nil then
     exit;
@@ -522,7 +553,7 @@ begin
   MdcLog('RefreshAll: end');
 end;
 
-function TMdcProblemsForm.TryGetActiveFileName(out aFileName: string): boolean;
+function TMdcProblemsForm.TryGetActiveFileName(out aFileName: string): Boolean;
 var
   lEditor: IOTAEditorServices;
   lView: IOTAEditView;
@@ -546,7 +577,7 @@ begin
   Result := aFileName <> '';
 end;
 
-function TMdcProblemsForm.TryCollectModuleErrors(const aFileName: string; out aErrors: TOTAErrors): boolean;
+function TMdcProblemsForm.TryCollectModuleErrors(const aFileName: string; out aErrors: TOTAErrors): Boolean;
 var
   lMods: IOTAModuleServices;
   lMod: IOTAModule;
@@ -573,27 +604,300 @@ begin
   end;
 end;
 
+function TMdcProblemsForm.TryResolveFileName(const aFileName: string; out aResolved: string): Boolean;
+var
+  lMods: IOTAModuleServices;
+  lProj: IOTAProject;
+  lGroup: IOTAProjectGroup;
+  lNeedle: string;
+  lNeedleFile: string;
+  lNeedleNoExt: string;
+  lNeedlePas: string;
+  lNeedleHasExt: Boolean;
+  i: Integer;
+
+  function NameMatches(const aFile: string): Boolean;
+  var
+    lFile: string;
+    lNoExt: string;
+  begin
+    lFile := ExtractFileName(aFile);
+    if SameText(lFile, lNeedleFile) then
+      Exit(True);
+
+    if (lNeedlePas <> '') and SameText(lFile, lNeedlePas) then
+      Exit(True);
+
+    lNoExt := ChangeFileExt(lFile, '');
+    if lNeedleHasExt then
+      Exit(False);
+
+    Result := SameText(lNoExt, lNeedleNoExt);
+  end;
+
+  function TryResolveRelative(const aPath, aBaseDir: string; out aFound: string): Boolean;
+  var
+    lFull: string;
+  begin
+    aFound := '';
+    lFull := aPath;
+    if lFull.Trim = '' then
+      Exit(False);
+
+    if (not TPath.IsPathRooted(lFull)) and (aBaseDir <> '') then
+      lFull := TPath.Combine(aBaseDir, lFull);
+
+    if FileExists(lFull) then
+    begin
+      aFound := ExpandFileName(lFull);
+      Exit(True);
+    end;
+
+    Result := False;
+  end;
+
+  function TryOpenUnits(out aFound: string): Boolean;
+  var
+    lItems: TArray<TMaxLogicPickItem>;
+    lItem: TMaxLogicPickItem;
+  begin
+    Result := False;
+    aFound := '';
+
+    lItems := TMaxLogicOpenUnitsProvider.GetItems;
+    for lItem in lItems do
+    begin
+      if NameMatches(lItem.FileName) and TryResolveRelative(lItem.FileName, '', aFound) then
+        Exit(True);
+    end;
+  end;
+
+  function ExpandEnvVars(const aText: string): string;
+  var
+    lNeeded: DWORD;
+  begin
+    lNeeded := Winapi.Windows.ExpandEnvironmentStrings(PChar(aText), nil, 0);
+    if lNeeded = 0 then
+      Exit(aText);
+
+    SetLength(Result, lNeeded - 1);
+    if Winapi.Windows.ExpandEnvironmentStrings(PChar(aText), PChar(Result), lNeeded) = 0 then
+      Result := aText;
+  end;
+
+  function EnvOrEmpty(const aName: string): string;
+  begin
+    Result := GetEnvironmentVariable(aName);
+  end;
+
+  function ExpandDollarMacros(const aText: string): string;
+  var
+    lOut: string;
+    p1, p2: Integer;
+    lVar, lVal: string;
+  begin
+    lOut := aText;
+
+    while True do
+    begin
+      p1 := Pos('$(', lOut);
+      if p1 = 0 then
+        Break;
+
+      p2 := PosEx(')', lOut, p1 + 2);
+      if p2 = 0 then
+        Break;
+
+      lVar := Copy(lOut, p1 + 2, p2 - (p1 + 2));
+      lVal := EnvOrEmpty(lVar);
+
+      if lVal = '' then
+        lVal := '$(' + lVar + ')';
+
+      lOut := Copy(lOut, 1, p1 - 1) + lVal + Copy(lOut, p2 + 1, MaxInt);
+    end;
+
+    Result := lOut;
+  end;
+
+  function TryModulesInProject(const aProj: IOTAProject; out aFound: string): Boolean;
+  var
+    j, lCount: Integer;
+    lInfo: IOTAModuleInfo;
+    lFn: string;
+    lBaseDir: string;
+  begin
+    Result := False;
+    aFound := '';
+
+    if aProj = nil then
+      Exit;
+
+    lBaseDir := '';
+    if aProj.FileName.Trim <> '' then
+      lBaseDir := ExtractFileDir(aProj.FileName);
+
+    lCount := aProj.GetModuleCount;
+    for j := 0 to lCount - 1 do
+    begin
+      lInfo := aProj.GetModule(j);
+      if lInfo = nil then
+        Continue;
+
+      lFn := lInfo.FileName;
+      if lFn.Trim = '' then
+        Continue;
+
+      if NameMatches(ExtractFileName(lFn)) then
+      begin
+        if TryResolveRelative(lFn, lBaseDir, aFound) then
+          Exit(True);
+      end;
+    end;
+  end;
+
+  function TryFindInSearchPath(const aProj: IOTAProject; out aFound: string): Boolean;
+  var
+    lOpts: IOTAProjectOptions;
+    lPaths: string;
+    lParts: TArray<string>;
+    lPart: string;
+    lDir: string;
+    lCandidate: string;
+  begin
+    Result := False;
+    aFound := '';
+
+    if aProj = nil then
+      Exit;
+
+    lOpts := aProj.ProjectOptions;
+    if lOpts = nil then
+      Exit;
+
+    lPaths := lOpts.Values['DCC_UnitSearchPath'];
+    if lPaths.Trim = '' then
+      Exit;
+
+    lParts := lPaths.Split([';']);
+    for lPart in lParts do
+    begin
+      lDir := lPart.Trim;
+      if lDir = '' then
+        Continue;
+
+      lDir := ExpandEnvVars(ExpandDollarMacros(lDir));
+
+      if not DirectoryExists(lDir) then
+        Continue;
+
+      lCandidate := TPath.Combine(lDir, lNeedleFile);
+      if FileExists(lCandidate) then
+      begin
+        aFound := ExpandFileName(lCandidate);
+        Exit(True);
+      end;
+
+      if lNeedlePas <> '' then
+      begin
+        lCandidate := TPath.Combine(lDir, lNeedlePas);
+        if FileExists(lCandidate) then
+        begin
+          aFound := ExpandFileName(lCandidate);
+          Exit(True);
+        end;
+      end;
+    end;
+  end;
+
+begin
+  aResolved := '';
+  lNeedle := aFileName.Trim;
+  if lNeedle = '' then
+  begin
+    mdcLog('TryResolveFileName: file to resolve was empty -> exit');
+    Exit(False);
+  end;
+
+  if GMdcLoggingEnabled then
+    MdcLog('TryResolveFileName: lookup "' + lNeedle + '"');
+
+  if FileExists(lNeedle) then
+  begin
+    aResolved := ExpandFileName(lNeedle);
+    MdcLog('TryResolveFileName: direct file exists');
+    Exit(True);
+  end;
+
+  lNeedleFile := ExtractFileName(lNeedle);
+  lNeedleNoExt := ChangeFileExt(lNeedleFile, '');
+  lNeedleHasExt := ExtractFileExt(lNeedleFile) <> '';
+  if lNeedleHasExt then
+    lNeedlePas := ''
+  else
+    lNeedlePas := lNeedleNoExt + '.pas';
+
+  if not Supports(BorlandIDEServices, IOTAModuleServices, lMods) then
+  begin
+    MdcLog('TryResolveFileName: IOTAModuleServices not supported');
+    Exit(False);
+  end;
+
+  lProj := lMods.GetActiveProject;
+  lGroup := lMods.MainProjectGroup;
+
+  if TryOpenUnits(aResolved) then
+  begin
+    MdcLog('TryResolveFileName: resolved via open units');
+    Exit(True);
+  end;
+
+  if TryModulesInProject(lProj, aResolved) then
+  begin
+    MdcLog('TryResolveFileName: resolved via active project modules');
+    Exit(True);
+  end;
+
+  if lGroup <> nil then
+  begin
+    for i := 0 to lGroup.ProjectCount - 1 do
+      if TryModulesInProject(lGroup.Projects[i], aResolved) then
+      begin
+        MdcLog('TryResolveFileName: resolved via project group modules');
+        Exit(True);
+      end;
+  end;
+
+  if TryFindInSearchPath(lProj, aResolved) then
+  begin
+    MdcLog('TryResolveFileName: resolved via project search path');
+    Exit(True);
+  end;
+
+  Result := False;
+end;
+
 function TMdcProblemsForm.BuildEiSignature(const aErrors: TOTAErrors): string;
 var
-  lSb: TStringBuilder;
+  lBuilder: TStringBuilder;
   g: IGarbo;
   lErr: TOTAError;
 begin
-  gc(lSb, TStringBuilder.Create(4096), g);
+  gc(lBuilder, TStringBuilder.Create(4096), g);
 
   for lErr in aErrors do
   begin
-    lSb.append(lErr.Severity);
-    lSb.append('|');
-    lSb.append(lErr.Text);
-    lSb.append('|');
-    lSb.append(lErr.start.Line);
-    lSb.append(':');
-    lSb.append(lErr.start.CharIndex);
-    lSb.AppendLine;
+    lBuilder.Append(lErr.Severity);
+    lBuilder.Append('|');
+    lBuilder.Append(lErr.Text);
+    lBuilder.Append('|');
+    lBuilder.Append(lErr.start.Line);
+    lBuilder.Append(':');
+    lBuilder.Append(lErr.start.CharIndex);
+    lBuilder.AppendLine;
   end;
 
-  Result := lSb.ToString;
+  Result := lBuilder.ToString;
 end;
 
 procedure TMdcProblemsForm.RefreshErrorInsight;
@@ -604,7 +908,7 @@ var
   lErr: TOTAError;
   lItem: TMdcProblemItem;
   lText: string;
-  lCnt: integer;
+  lCnt: Integer;
 begin
   if fEiRefreshing then
     exit;
@@ -619,7 +923,8 @@ begin
 
     if not TryCollectModuleErrors(lFile, lErrors) then
     begin
-      MdcLog('RefreshErrorInsight: TryCollectModuleErrors failed for ' + lFile);
+      if GMdcLoggingEnabled then
+        MdcLog('RefreshErrorInsight: TryCollectModuleErrors failed for ' + lFile);
       exit;
     end;
 
@@ -658,7 +963,8 @@ begin
     if fLbErrorInsight.Items.Count = 0 then
       fLbErrorInsight.Items.Add('(No Error Insight errors/warnings)');
 
-    MdcLog(Format('RefreshErrorInsight: %d items for %s', [lCnt, lFile]));
+    if GMdcLoggingEnabled then
+      MdcLog(Format('RefreshErrorInsight: %d items for %s', [lCnt, lFile]));
   finally
     fEiRefreshing := False;
   end;
@@ -668,9 +974,9 @@ procedure TMdcProblemsForm.EnsureMessageViewShown;
 var
   lTA: INTAServices;
 
-  function FindActionByName(const AName: string): TBasicAction;
+  function FindActionByName(const aName: string): TBasicAction;
   var
-    i: integer;
+    i: Integer;
     lAct: TBasicAction;
   begin
     Result := nil;
@@ -681,7 +987,7 @@ var
     for i := 0 to lTA.ActionList.ActionCount - 1 do
     begin
       lAct := lTA.ActionList.Actions[i];
-      if SameText(lAct.Name, AName) then
+      if SameText(lAct.Name, aName) then
         exit(lAct);
     end;
   end;
@@ -723,7 +1029,7 @@ end;
 
 function TMdcProblemsForm.FindMessageViewForm: TForm;
 var
-  i: integer;
+  i: Integer;
   lForm: TForm;
 begin
   Result := nil;
@@ -734,35 +1040,36 @@ begin
     if lForm = nil then
       Continue;
 
-    if ContainsText(lForm.classname, 'Message') and ContainsText(lForm.classname, 'View') then
+    if ContainsText(lForm.ClassName, 'Message') and ContainsText(lForm.ClassName, 'View') then
       exit(lForm);
 
-    if SameText(lForm.caption, 'Messages') then
+    if SameText(lForm.Caption, 'Messages') then
       exit(lForm);
   end;
 end;
 
-function TMdcProblemsForm.TryCopyBuildMessagesToClipboard(out aText: string): boolean;
+function TMdcProblemsForm.TryCopyBuildMessagesToClipboard(out aText: string): Boolean;
 var
   lOldFocus: hwnd;
   lForm: TForm;
-  lPc: TPageControl;
+  lPageControl: TPageControl;
   lHostHandle: hwnd;
+  lControl: TWinControl;
 
-  function GetWinClassName(aH: hwnd): string;
+  function GetWinClassName(aHwnd: hwnd): string;
   var
     lBuf: array[0..255] of char;
   begin
     Result := '';
-    if aH = 0 then
-      exit;
-    if GetClassName(aH, lBuf, length(lBuf)) > 0 then
+    if aHwnd = 0 then
+      Exit;
+    if GetClassName(aHwnd, lBuf, Length(lBuf)) > 0 then
       Result := lBuf;
   end;
 
-  function IsVisibleAndEnabled(aH: hwnd): boolean;
+  function IsVisibleAndEnabled(aHwnd: hwnd): Boolean;
   begin
-    Result := (aH <> 0) and IsWindowVisible(aH) and IsWindowEnabled(aH);
+    Result := (aHwnd <> 0) and IsWindowVisible(aHwnd) and IsWindowEnabled(aHwnd);
   end;
 
   function FindFirstListViewHandle(aRoot: hwnd): hwnd;
@@ -806,17 +1113,17 @@ var
 
   function ReadListViewAllText(aList: hwnd): string;
   var
-    lSb: TStringBuilder;
+    lBuilder: TStringBuilder;
     lHeader: hwnd;
-    lColCount: integer;
-    lItemCount: integer;
-    lItem: integer;
-    lCol: integer;
+    lColCount: Integer;
+    lItemCount: Integer;
+    lItem: Integer;
+    lCol: Integer;
     lBuf: array[0..2047] of char;
-    lLv: TLVItem;
+    lListViewItem: TLVItem;
     lText: string;
-    lLineStarted: boolean;
-    lG: IGarbo;
+    lLineStarted: Boolean;
+    lGarbo: IGarbo;
   begin
     Result := '';
     if aList = 0 then
@@ -835,12 +1142,12 @@ var
     if lItemCount <= 0 then
       exit;
 
-    gc(lSb, TStringBuilder.Create(lItemCount * 128), lG);
+    gc(lBuilder, TStringBuilder.Create(lItemCount * 128), lGarbo);
 
-    ZeroMemory(@lLv, SizeOf(lLv));
-    lLv.Mask := LVIF_TEXT;
-    lLv.pszText := @lBuf[0];
-    lLv.cchTextMax := length(lBuf);
+    ZeroMemory(@lListViewItem, SizeOf(lListViewItem));
+    lListViewItem.Mask := LVIF_TEXT;
+    lListViewItem.pszText := @lBuf[0];
+    lListViewItem.cchTextMax := Length(lBuf);
 
     for lItem := 0 to lItemCount - 1 do
     begin
@@ -849,31 +1156,31 @@ var
       for lCol := 0 to lColCount - 1 do
       begin
         ZeroMemory(@lBuf[0], SizeOf(lBuf));
-        lLv.iItem := lItem;
-        lLv.iSubItem := lCol;
+        lListViewItem.iItem := lItem;
+        lListViewItem.iSubItem := lCol;
 
-        SendMessage(aList, LVM_GETITEMTEXT, WParam(lItem), LPARAM(@lLv));
+        SendMessage(aList, LVM_GETITEMTEXT, WParam(lItem), LPARAM(@lListViewItem));
         lText := Trim(string(lBuf));
 
         if lText = '' then
           Continue;
 
         if lLineStarted then
-          lSb.append(#9); // keep columns separable (tab)
-        lSb.append(lText);
+          lBuilder.Append(#9); // keep columns separable (tab)
+        lBuilder.Append(lText);
         lLineStarted := True;
       end;
 
       if lLineStarted then
-        lSb.AppendLine;
+        lBuilder.AppendLine;
     end;
 
-    Result := lSb.ToString;
+    Result := lBuilder.ToString;
   end;
 
   function FindPageControl(aParent: TWinControl): TPageControl;
   var
-    i: integer;
+    i: Integer;
     lChild: TControl;
     lWin: TWinControl;
   begin
@@ -898,18 +1205,18 @@ var
     end;
   end;
 
-  procedure ActivateBuildTab(aPc: TPageControl);
+  procedure ActivateBuildTab(aPageControl: TPageControl);
   var
-    i: integer;
+    i: Integer;
   begin
-    if aPc = nil then
+    if aPageControl = nil then
       exit;
 
-    for i := 0 to aPc.PageCount - 1 do
+    for i := 0 to aPageControl.PageCount - 1 do
     begin
-      if ContainsText(aPc.Pages[i].caption, 'Build') then
+      if ContainsText(aPageControl.Pages[i].Caption, 'Build') then
       begin
-        aPc.ActivePage := aPc.Pages[i];
+        aPageControl.ActivePage := aPageControl.Pages[i];
         exit;
       end;
     end;
@@ -921,12 +1228,12 @@ var
     if aForm = nil then
       exit;
 
-    lPc := FindPageControl(aForm);
-    if lPc <> nil then
+    lPageControl := FindPageControl(aForm);
+    if lPageControl <> nil then
     begin
-      ActivateBuildTab(lPc);
-      if (lPc.ActivePage <> nil) and lPc.ActivePage.HandleAllocated then
-        exit(lPc.ActivePage.Handle);
+      ActivateBuildTab(lPageControl);
+      if (lPageControl.ActivePage <> nil) and lPageControl.ActivePage.HandleAllocated then
+        exit(lPageControl.ActivePage.Handle);
     end;
 
     if aForm.HandleAllocated then
@@ -955,19 +1262,22 @@ begin
       exit;
     end;
 
-    MdcLog('Messages form found: ' + lForm.classname + ' caption="' + lForm.caption + '"');
-    DumpControlTree(lForm);
+    if GMdcLoggingEnabled then
+    begin
+      MdcLog('Messages form found: ' + lForm.ClassName + ' caption="' + lForm.Caption + '"');
+      DumpControlTree(lForm);
 
-    // Try to find the actual message list/tree/grid control (best-guess by class name)
-    var lCtrl := FindFirstByClassHint(lForm, [
-        'VirtualStringTree', 'VirtualTree', 'ListView', 'TreeView', 'StringGrid', 'Memo', 'SynEdit'
-        ]);
+      // Try to find the actual message list/tree/grid control (best-guess by class name)
+      lControl := FindFirstByClassHint(lForm, [
+          'VirtualStringTree', 'VirtualTree', 'ListView', 'TreeView', 'StringGrid', 'Memo', 'SynEdit'
+          ]);
 
-    if lCtrl <> nil then
-      MdcLog('Candidate messages control: ' + lCtrl.classname + ' name="' + lCtrl.Name + '"')
-    else
-      MdcLog('No candidate messages control found (will likely copy wrong thing).');
-    // --------
+      if lControl <> nil then
+        MdcLog('Candidate messages control: ' + lControl.ClassName + ' name="' + lControl.Name + '"')
+      else
+        MdcLog('No candidate messages control found (will likely copy wrong thing).');
+      // --------
+    end;
 
     // Make sure the Messages window is alive/visible
     lForm.SHOW;
@@ -989,24 +1299,26 @@ begin
 
     aText := ReadListViewAllText(lList);
     Result := aText <> '';
-    MdcLog(Format('TryReadBuildMessages: ok=%s len=%d', [BoolToStr(Result, True), length(aText)]));
+    if GMdcLoggingEnabled then
+      MdcLog(Format('TryReadBuildMessages: ok=%s len=%d', [BoolToStr(Result, True), Length(aText)]));
   finally
     if lOldFocus <> 0 then
       winApi.Windows.SetFocus(lOldFocus);
   end;
 end;
 
-function TMdcProblemsForm.TryParseBuildLine(const aLine: string; out aItem: TMdcProblemItem): boolean;
+function TMdcProblemsForm.TryParseBuildLine(const aLine: string; out aItem: TMdcProblemItem): Boolean;
 var
   lLine: string;
   lRest: string;
-  lHdrEnd: integer;
-  lParen1, lParen2: integer;
+  lHdrEnd: Integer;
+  lParen1, lParen2: Integer;
   lFilePart: string;
-  lLineNo: integer;
+  lLineNo: Integer;
   lMsg: string;
-  lIsError, lIsWarning: boolean;
-  lAfterParen: integer;
+  lUnitName: string;
+  lIsError, lIsWarning: Boolean;
+  lAfterParen: Integer;
 begin
   aItem := nil;
   Result := False;
@@ -1067,14 +1379,15 @@ begin
   aItem.FileName := lFilePart;
   aItem.LineNo := lLineNo;
   aItem.ColNo := 1;
+  lUnitName := ChangeFileExt(ExtractFileName(lFilePart), '');
 
   if lIsError then
   begin
     aItem.kind := pkBuildError;
-    aItem.Text := 'Error: ' + lMsg;
+    aItem.Text := lMsg + ' | ' + lUnitName + ' (' + IntToStr(lLineNo) + ')';
   end else begin
     aItem.kind := pkBuildWarning;
-    aItem.Text := 'Warning: ' + lMsg;
+    aItem.Text := lMsg + ' | ' + lUnitName + ' (' + IntToStr(lLineNo) + ')';
   end;
 
   Result := True;
@@ -1086,9 +1399,40 @@ var
   lLine: string;
   lItem: TMdcProblemItem;
   lNorm: string;
-  lErrCnt, lWarnCnt, lSkippedWarn, lSkippedErr: integer;
+  lErrCnt, lWarnCnt, lSkippedWarn, lSkippedErr: Integer;
 
-  function LooksLikeLooseDiagnostic(const s: string; out aKind: TMdcProblemKind; out aMsg: string): boolean;
+  function StripDiagnosticPrefix(const s: string): string;
+  var
+    l: string;
+    lPos: Integer;
+  begin
+    l := Trim(s);
+    if l = '' then
+      Exit('');
+
+    if l[1] = '[' then
+    begin
+      lPos := pos(']', l);
+      if lPos > 0 then
+        l := Trim(Copy(l, lPos + 1, MaxInt));
+    end;
+
+    if StartsText('dcc', l) then
+    begin
+      lPos := pos(':', l);
+      if lPos > 0 then
+        l := Trim(Copy(l, lPos + 1, MaxInt));
+    end;
+
+    if StartsText('Warning:', l) then
+      l := Trim(Copy(l, Length('Warning:') + 1, MaxInt))
+    else if StartsText('Error:', l) then
+      l := Trim(Copy(l, Length('Error:') + 1, MaxInt));
+
+    Result := l;
+  end;
+
+  function LooksLikeLooseDiagnostic(const s: string; out aKind: TMdcProblemKind; out aMsg: string): Boolean;
   var
     l: string;
   begin
@@ -1107,14 +1451,14 @@ var
       if ContainsText(l, ' Error]') then
       begin
         aKind := pkBuildError;
-        aMsg := l;
+        aMsg := StripDiagnosticPrefix(l);
         exit(True);
       end;
 
       if ContainsText(l, ' Warning]') then
       begin
         aKind := pkBuildWarning;
-        aMsg := l;
+        aMsg := StripDiagnosticPrefix(l);
         exit(True);
       end;
 
@@ -1126,14 +1470,14 @@ var
       if ContainsText(l, ' Error:') then
       begin
         aKind := pkBuildError;
-        aMsg := l;
+        aMsg := StripDiagnosticPrefix(l);
         exit(True);
       end;
 
       if ContainsText(l, ' Warning:') then
       begin
         aKind := pkBuildWarning;
-        aMsg := l;
+        aMsg := StripDiagnosticPrefix(l);
         exit(True);
       end;
     end;
@@ -1142,14 +1486,14 @@ var
     if StartsText('Error:', l) then
     begin
       aKind := pkBuildError;
-      aMsg := l;
+      aMsg := StripDiagnosticPrefix(l);
       exit(True);
     end;
 
     if StartsText('Warning:', l) then
     begin
       aKind := pkBuildWarning;
-      aMsg := l;
+      aMsg := StripDiagnosticPrefix(l);
       exit(True);
     end;
   end;
@@ -1213,55 +1557,94 @@ begin
   if fLbBuildWarnings.Items.Count = 0 then
     fLbBuildWarnings.Items.Add('(No build warnings found or not accessible)');
 
-  MdcLog(Format('PopulateFromBuildText: errors=%d warnings=%d skippedErr=%d skippedWarn=%d',
-    [lErrCnt, lWarnCnt, lSkippedErr, lSkippedWarn]));
+  if GMdcLoggingEnabled then
+    MdcLog(Format('PopulateFromBuildText: errors=%d warnings=%d skippedErr=%d skippedWarn=%d',
+      [lErrCnt, lWarnCnt, lSkippedErr, lSkippedWarn]));
 end;
 
 procedure TMdcProblemsForm.RefreshBuildMessages;
 var
   lText: string;
+  lMsgForm: TForm;
+  lTree: TWinControl;
+  lOpts: TMdcRttiDumpOptions;
 
-  function TryReadMessagesViewText(out aOut: string): boolean;
-  var
-    lMsgForm: TForm;
-    lTree: TWinControl;
+  function TryReadMessagesViewText(out aText: string): Boolean;
   begin
-    aOut := '';
     Result := False;
+    aText := '';
 
+    EnsureMessageViewShown;
     lMsgForm := FindMessageViewForm;
-    if lMsgForm = nil then
-    begin
-      MdcLog('RefreshBuildMessages: message view form not found, calling EnsureMessageViewShown');
-      EnsureMessageViewShown;
-      lMsgForm := FindMessageViewForm;
-    end;
 
     if lMsgForm = nil then
     begin
-      MdcLog('RefreshBuildMessages: still no message view form');
-      exit;
+      MdcLog('RefreshBuildMessages: MessageViewForm not found');
+      Exit;
     end;
 
-    // Prefer the known name from your inspector output.
+    ActivateBuildTabIfPresent(lMsgForm);
+
+    // Prefer stable name first.
     lTree := FindWinControlByName(lMsgForm, 'MessageTreeView0');
+
+    // Fallback: find something VirtualTree-ish (we keep this broad on purpose).
     if lTree = nil then
-      lTree := FindFirstVirtualTreeLike(lMsgForm);
+      lTree := FindFirstByClassNameContains(lMsgForm, 'Virtual');
+
+    if lTree = nil then
+      lTree := FindFirstByClassNameContains(lMsgForm, 'DrawTree');
 
     if lTree = nil then
     begin
-      MdcLog('RefreshBuildMessages: message tree not found');
-      exit;
+      if GMdcLoggingEnabled then
+      begin
+        MdcLog('RefreshBuildMessages: message tree not found; dumping control tree');
+        DumpControlTree(lMsgForm, '  ');
+      end;
+      Exit;
     end;
 
-    if not TryInvokeContentToText(lTree, aOut) then
+    if GMdcLoggingEnabled then
     begin
-      MdcLog(Format('ContentToText failed/unsupported for %s', [lTree.classname]));
-      MdcDumpObjectDiagnostics(lTree, 'MessageTreeView0');
-      exit;
+      MdcLog(Format('RefreshBuildMessages: tree found: %s  Name=%s  Handle=%d',
+        [lTree.ClassName, lTree.Name, lTree.Handle]));
+
+      MdcDumpClassHierarchy(lTree, 'RefreshBuildMessages: tree hierarchy');
+
+      lOpts.MaxProps := 250;
+      lOpts.MaxMethods := 400;
+      lOpts.OnlyInteresting := True;
+      MdcDumpRttiMembers(lTree, 'RefreshBuildMessages: tree RTTI (interesting)', lOpts);
     end;
 
-    Result := aOut <> '';
+    // First: try the old “ContentToText” (if the IDE control offers it).
+    if TryInvokeNoArgStringMethod(lTree, 'ContentToText', aText) then
+    begin
+      if GMdcLoggingEnabled then
+        MdcLog(Format('RefreshBuildMessages: ContentToText ok (chars=%d)', [Length(aText)]));
+      Result := True;
+      Exit;
+    end;
+
+    if TryInvokeContentToText(lTree, aText) then
+    begin
+      if GMdcLoggingEnabled then
+        MdcLog(Format('RefreshBuildMessages: ContentToText fallback ok (chars=%d)', [Length(aText)]));
+      Result := True;
+      Exit;
+    end;
+
+    // Second: treat it as a virtual tree and enumerate nodes.
+    if TryVirtualTreeToText(lTree, aText) then
+    begin
+      if GMdcLoggingEnabled then
+        MdcLog(Format('RefreshBuildMessages: VirtualTree extraction ok (chars=%d)', [Length(aText)]));
+      Result := True;
+      Exit;
+    end;
+
+    MdcLog('RefreshBuildMessages: no supported extraction path worked');
   end;
 
 begin
@@ -1269,7 +1652,8 @@ begin
 
   if TryReadMessagesViewText(lText) then
   begin
-    MdcLog('RefreshBuildMessages: got message-view text len=' + IntToStr(length(lText)));
+    if GMdcLoggingEnabled then
+      MdcLog('RefreshBuildMessages: got message-view text len=' + IntToStr(Length(lText)));
     PopulateFromBuildText(lText);
     MdcLog('RefreshBuildMessages: ok');
     exit;
@@ -1285,18 +1669,22 @@ end;
 
 procedure TMdcProblemsForm.JumpToItem(aItem: TMdcProblemItem);
 var
-  lAction: IOTAActionServices;
   lEditor: IOTAEditorServices;
   lView: IOTAEditView;
   lView140: IOTAEditView140;
   lEditWin: INTAEditWindow;
   lPos: TOTAEditPos;
+  lMods: IOTAModuleServices;
+  lMod: IOTAModule;
+  lTargetFile: string;
+  lOpened: Boolean;
 begin
   if aItem = nil then
     exit;
 
-  MdcLog(Format('JumpToItem: kind=%d file="%s" line=%d col=%d text="%s"',
-    [Ord(aItem.kind), aItem.FileName, aItem.LineNo, aItem.ColNo, aItem.Text]));
+  if GMdcLoggingEnabled then
+    MdcLog(Format('JumpToItem: kind=%d file="%s" line=%d col=%d text="%s"',
+      [Ord(aItem.kind), aItem.FileName, aItem.LineNo, aItem.ColNo, aItem.Text]));
 
   // Guard: ignore non-jumpable items (fallback lines)
   if (Trim(aItem.FileName) = '') or (aItem.LineNo <= 0) then
@@ -1305,16 +1693,45 @@ begin
     exit;
   end;
 
-  if Supports(BorlandIDEServices, IOTAActionServices, lAction) then
+  lTargetFile := aItem.FileName;
+  if (lTargetFile.Trim <> '') then
+  begin
+    if TryResolveFileName(aItem.FileName, lTargetFile) then
+    begin
+      aItem.FileName := lTargetFile;
+      if GMdcLoggingEnabled then
+        MdcLog('JumpToItem: resolved file to "' + lTargetFile + '"');
+    end else begin
+      MdcLog('JumpToItem: file not resolved, using original');
+      lTargetFile := aItem.FileName;
+    end;
+  end;
+
+  lOpened := TMdcIdeApi.OpenInIde(lTargetFile);
+  if GMdcLoggingEnabled then
+    MdcLog(Format('JumpToItem: OpenInIde ok=%s', [BoolToStr(lOpened, True)]));
+
+  if (not lOpened) and Supports(BorlandIDEServices, IOTAModuleServices, lMods) then
   begin
     try
-      lAction.OpenFile(aItem.FileName);
-      MdcLog('JumpToItem: OpenFile ok');
+      lMod := lMods.OpenModule(lTargetFile);
+      lOpened := lMod <> nil;
+      if lOpened then
+      begin
+        lMod.Show;
+        MdcLog('JumpToItem: OpenModule ok');
+      end else begin
+        MdcLog('JumpToItem: OpenModule FAILED');
+      end;
     except
-      MdcLog('JumpToItem: OpenFile FAILED');
+      MdcLog('JumpToItem: OpenModule FAILED');
     end;
-  end else begin
-    MdcLog('JumpToItem: IOTAActionServices not supported');
+  end;
+
+  if not lOpened then
+  begin
+    MdcLog('JumpToItem: open failed, aborting cursor move');
+    Exit;
   end;
 
   if not Supports(BorlandIDEServices, IOTAEditorServices, lEditor) then
@@ -1348,6 +1765,11 @@ begin
       if (lEditWin <> nil) and (lEditWin.Form <> nil) then
       begin
         lEditWin.Form.bringToFront;
+        if lEditWin.Form.HandleAllocated then
+        begin
+          SetForegroundWindow(lEditWin.Form.Handle);
+          SetActiveWindow(lEditWin.Form.Handle);
+        end;
         lEditWin.Form.SetFocus;
         MdcLog('JumpToItem: focused INTAEditWindow.Form');
       end else begin
@@ -1366,6 +1788,7 @@ begin
     MdcLog('JumpToItem: IOTAEditView140 not supported, used fallback');
   end;
 end;
+
 
 { TMdcProblemsKeyBinding }
 
@@ -1422,7 +1845,8 @@ begin
   GBindingIntf := TMdcProblemsKeyBinding.Create(lShortcut);
   GBindingIndex := lKS.AddKeyboardBinding(GBindingIntf);
 
-  MdcLog('Install: keyboard binding added idx=' + IntToStr(GBindingIndex));
+  if GMdcLoggingEnabled then
+    MdcLog('Install: keyboard binding added idx=' + IntToStr(GBindingIndex));
 end;
 
 class procedure TMdcFocusErrorInsight.Uninstall;
@@ -1435,7 +1859,8 @@ begin
   begin
     try
       lKS.RemoveKeyboardBinding(GBindingIndex);
-      MdcLog('Uninstall: removed keyboard binding idx=' + IntToStr(GBindingIndex));
+      if GMdcLoggingEnabled then
+        MdcLog('Uninstall: removed keyboard binding idx=' + IntToStr(GBindingIndex));
     except
       MdcLog('Uninstall: removing keyboard binding FAILED');
     end;
@@ -1458,23 +1883,6 @@ begin
 
   MdcLog('Uninstall: end');
 end;
-
-procedure produceWarning;
-var
-  ansi: AnsiString;
-  s: string;
-  i: integer;
-  c: Cardinal;
-begin
-  s := 'SCZ';
-  ansi := s;
-  i := 1;
-  c := 1;
-  i := c + i;
-end;
-
-initialization
-  produceWarning;
 
 end.
 
