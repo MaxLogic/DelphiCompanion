@@ -81,7 +81,7 @@ const
 
 class function TMdcSettings.DefaultFocusErrorInsight: TShortCut;
 begin
-  Result := TextToShortCut('Ctrl+Shift+E');
+  Result := TextToShortCut('Ctrl+Shift+F1');
 end;
 
 class procedure TMdcSettings.LoadFocusErrorInsightShortcut(out aSc: TShortCut);
