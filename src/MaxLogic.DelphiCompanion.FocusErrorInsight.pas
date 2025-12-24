@@ -18,11 +18,21 @@ type
 implementation
 
 uses
-  System.IOUtils, System.Rtti, System.StrUtils, System.SysUtils, System.TypInfo,
+  System.Generics.Collections, System.IOUtils, System.Rtti, System.StrUtils, System.SysUtils, System.TypInfo,
   Vcl.ClipBrd, Vcl.Controls, Vcl.ExtCtrls, Vcl.Graphics,
-  AutoFree, maxLogic.DelphiCompanion.IdeApi, maxLogic.DelphiCompanion.IdeUiInspector,
+  AutoFree, maxLogic.StrUtils, maxLogic.DelphiCompanion.IdeApi, maxLogic.DelphiCompanion.IdeUiInspector,
   maxLogic.DelphiCompanion.Logger, maxLogic.DelphiCompanion.Providers,
   maxLogic.DelphiCompanion.Settings;
+
+resourcestring
+  SEiTitleBase = '&Error Insight  (F1)';
+  SBuildErrorsTitleBase = 'Build E&rrors  (F2)';
+  SBuildWarningsTitleBase = 'Build &Warnings  (F3)';
+  STitleWithCount = '%s (%d)';
+  SNoErrorInsight = '(No Error Insight errors/warnings)';
+  SNoBuildErrors = '(No build errors found or not accessible)';
+  SNoBuildWarnings = '(No build warnings found or not accessible)';
+  SBuildMessagesUnavailable = '(Build messages not accessible right now)';
 
 type
   PHWND = ^hwnd;
@@ -47,6 +57,9 @@ type
     fLbBuildErrors: TListBox;
     fLbBuildWarnings: TListBox;
 
+    fEdBuildErrors: TEdit;
+    fEdBuildWarnings: TEdit;
+
     fLblEi: TStaticText;
     fLblErr: TStaticText;
     fLblWarn: TStaticText;
@@ -56,6 +69,10 @@ type
 
     fLastEiSignature: string;
     fEiRefreshing: Boolean;
+    fBuildMessagesAccessible: Boolean;
+
+    fBuildErrorItems: TArray<TMdcProblemItem>;
+    fBuildWarningItems: TArray<TMdcProblemItem>;
 
     fHooked: Boolean;
 
@@ -71,13 +88,24 @@ type
     procedure BtnRefreshClick(Sender: TObject);
     procedure BtnCloseClick(Sender: TObject);
 
-    procedure ClearListBoxItems(aLb: TListBox);
+    procedure ClearListBoxItems(aLb: TListBox; aFreeObjects: Boolean = True);
+    procedure ClearBuildItems(var aItems: TArray<TMdcProblemItem>);
     function SelectedItem(aLb: TListBox): TMdcProblemItem;
+
+    procedure BuildFilterChange(Sender: TObject);
+    procedure BuildFilterKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+    procedure ApplyBuildFilters;
+    procedure ApplyBuildFilterToList(
+      const aItems: TArray<TMdcProblemItem>; const aFilterText: string;
+      aList: TListBox; const aEmptyText: string; out aVisibleCount: Integer);
 
     procedure JumpToItem(aItem: TMdcProblemItem);
     procedure RefreshAll;
     procedure RefreshErrorInsight;
     procedure RefreshBuildMessages;
+
+    procedure UpdateErrorInsightTitle(aCount: Integer);
+    procedure UpdateBuildTitles(aErrCount, aWarnCount: Integer);
 
     function TryGetActiveFileName(out aFileName: string): Boolean;
     function TryCollectModuleErrors(const aFileName: string; out aErrors: TOTAErrors): Boolean;
@@ -158,6 +186,8 @@ constructor TMdcProblemsForm.Create(aOwner: TComponent);
 begin
   inherited CreateNew(aOwner);
 
+  fBuildMessagesAccessible := False;
+
   OnDestroy := FormDestroy;
   OnClose := FormClose;
   OnResize := FormResize;
@@ -180,7 +210,6 @@ begin
 
   fLblEi := TStaticText.Create(self);
   fLblEi.Parent := self;
-  fLblEi.caption := '&Error Insight  (F1)';
   fLblEi.ShowHint := True;
   fLblEi.hint := 'Hotkey: F1 focuses this list';
   fLblEi.FocusControl := fLbErrorInsight;
@@ -195,10 +224,16 @@ begin
 
   fLblErr := TStaticText.Create(self);
   fLblErr.Parent := self;
-  fLblErr.caption := 'Build E&rrors  (F2)';
   fLblErr.ShowHint := True;
   fLblErr.hint := 'Hotkey: F2 focuses this list';
-  fLblErr.FocusControl := fLbBuildErrors;
+
+  fEdBuildErrors := TEdit.Create(self);
+  fEdBuildErrors.Parent := self;
+  fEdBuildErrors.OnChange := BuildFilterChange;
+  fEdBuildErrors.OnKeyDown := BuildFilterKeyDown;
+  fEdBuildErrors.TabStop := True;
+
+  fLblErr.FocusControl := fEdBuildErrors;
 
   fLbBuildWarnings := TListBox.Create(self);
   fLbBuildWarnings.Parent := self;
@@ -210,10 +245,16 @@ begin
 
   fLblWarn := TStaticText.Create(self);
   fLblWarn.Parent := self;
-  fLblWarn.caption := 'Build &Warnings  (F3)';
   fLblWarn.ShowHint := True;
   fLblWarn.hint := 'Hotkey: F3 focuses this list';
-  fLblWarn.FocusControl := fLbBuildWarnings;
+
+  fEdBuildWarnings := TEdit.Create(self);
+  fEdBuildWarnings.Parent := self;
+  fEdBuildWarnings.OnChange := BuildFilterChange;
+  fEdBuildWarnings.OnKeyDown := BuildFilterKeyDown;
+  fEdBuildWarnings.TabStop := True;
+
+  fLblWarn.FocusControl := fEdBuildWarnings;
 
   // --- BUTTONS ---
   fBtnRefresh := TButton.Create(self);
@@ -239,6 +280,17 @@ begin
   KeyPreview := True;
   OnKeyDown := LbKeyDown;
 
+  fLbErrorInsight.TabOrder := 0;
+  fEdBuildErrors.TabOrder := 1;
+  fLbBuildErrors.TabOrder := 2;
+  fEdBuildWarnings.TabOrder := 3;
+  fLbBuildWarnings.TabOrder := 4;
+  fBtnRefresh.TabOrder := 5;
+  fBtnClose.TabOrder := 6;
+
+  UpdateErrorInsightTitle(0);
+  UpdateBuildTitles(0, 0);
+
   UpdateLayout;
   ActiveControl := fLbErrorInsight;
 
@@ -252,7 +304,7 @@ begin
     MdcLog('Create: HookMainWindow=FAILED');
   end;
 
-  RefreshAll;
+
 end;
 
 destructor TMdcProblemsForm.Destroy;
@@ -277,8 +329,10 @@ begin
   end;
 
   ClearListBoxItems(fLbErrorInsight);
-  ClearListBoxItems(fLbBuildErrors);
-  ClearListBoxItems(fLbBuildWarnings);
+  ClearListBoxItems(fLbBuildErrors, False);
+  ClearListBoxItems(fLbBuildWarnings, False);
+  ClearBuildItems(fBuildErrorItems);
+  ClearBuildItems(fBuildWarningItems);
 
   inherited Destroy;
 end;
@@ -311,6 +365,7 @@ begin
     winApi.Windows.SetActiveWindow(GProblemsForm.Handle);
   end;
 
+  GProblemsForm.RefreshAll;
   GProblemsForm.SetFocus;
   MdcLog('ShowSingleton: done');
 end;
@@ -341,7 +396,9 @@ end;
 procedure TMdcProblemsForm.UpdateLayout;
 var
   lMargin, lGap, lLabelTop, lLabelHeight: Integer;
-  lListTop, lListWidth, lListHeight: Integer;
+  lLabelGap, lFilterGap, lFilterHeight: Integer;
+  lListTopEi, lListTopBuild, lListWidth, lListHeightEi, lListHeightBuild: Integer;
+  lFilterTop: Integer;
   lButtonsTop, lButtonHeight, lButtonWidth: Integer;
 
   function SV(v: Integer): Integer;
@@ -351,6 +408,7 @@ var
 
 begin
   if (fLbErrorInsight = nil) or (fLbBuildErrors = nil) or (fLbBuildWarnings = nil) or
+     (fEdBuildErrors = nil) or (fEdBuildWarnings = nil) or
      (fLblEi = nil) or (fLblErr = nil) or (fLblWarn = nil) or
      (fBtnRefresh = nil) or (fBtnClose = nil) then
     Exit;
@@ -359,26 +417,39 @@ begin
   lGap := SV(10);
   lLabelTop := SV(10);
   lLabelHeight := SV(18);
-  lListTop := SV(35);
+  lLabelGap := SV(7);
+  lFilterGap := SV(6);
+  lFilterHeight := SV(22);
   lButtonHeight := SV(30);
   lButtonWidth := SV(140);
   lButtonsTop := ClientHeight - SV(45);
 
-  lListHeight := lButtonsTop - lListTop - lGap;
-  if lListHeight < SV(1) then
-    lListHeight := SV(1);
+  lListTopEi := lLabelTop + lLabelHeight + lLabelGap;
+  lFilterTop := lLabelTop + lLabelHeight + lLabelGap;
+  lListTopBuild := lFilterTop + lFilterHeight + lFilterGap;
+
+  lListHeightEi := lButtonsTop - lListTopEi - lGap;
+  if lListHeightEi < SV(1) then
+    lListHeightEi := SV(1);
+
+  lListHeightBuild := lButtonsTop - lListTopBuild - lGap;
+  if lListHeightBuild < SV(1) then
+    lListHeightBuild := SV(1);
 
   lListWidth := (ClientWidth - (lMargin * 2) - (lGap * 2)) div 3;
   if lListWidth < SV(1) then
     lListWidth := SV(1);
 
-  fLbErrorInsight.SetBounds(lMargin, lListTop, lListWidth, lListHeight);
-  fLbBuildErrors.SetBounds(fLbErrorInsight.Left + lListWidth + lGap, lListTop, lListWidth, lListHeight);
-  fLbBuildWarnings.SetBounds(fLbBuildErrors.Left + lListWidth + lGap, lListTop, lListWidth, lListHeight);
+  fLbErrorInsight.SetBounds(lMargin, lListTopEi, lListWidth, lListHeightEi);
+  fLbBuildErrors.SetBounds(fLbErrorInsight.Left + lListWidth + lGap, lListTopBuild, lListWidth, lListHeightBuild);
+  fLbBuildWarnings.SetBounds(fLbBuildErrors.Left + lListWidth + lGap, lListTopBuild, lListWidth, lListHeightBuild);
 
   fLblEi.SetBounds(fLbErrorInsight.Left, lLabelTop, lListWidth, lLabelHeight);
   fLblErr.SetBounds(fLbBuildErrors.Left, lLabelTop, lListWidth, lLabelHeight);
   fLblWarn.SetBounds(fLbBuildWarnings.Left, lLabelTop, lListWidth, lLabelHeight);
+
+  fEdBuildErrors.SetBounds(fLbBuildErrors.Left, lFilterTop, lListWidth, lFilterHeight);
+  fEdBuildWarnings.SetBounds(fLbBuildWarnings.Left, lFilterTop, lListWidth, lFilterHeight);
 
   fBtnRefresh.SetBounds(lMargin, lButtonsTop, lButtonWidth, lButtonHeight);
   fBtnClose.SetBounds(fBtnRefresh.Left + fBtnRefresh.Width + lGap, lButtonsTop, lButtonWidth, lButtonHeight);
@@ -516,17 +587,120 @@ begin
   end;
 end;
 
-procedure TMdcProblemsForm.ClearListBoxItems(aLb: TListBox);
+procedure TMdcProblemsForm.BuildFilterChange(Sender: TObject);
+begin
+  ApplyBuildFilters;
+end;
+
+procedure TMdcProblemsForm.BuildFilterKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+begin
+  if Key = VK_DOWN then
+  begin
+    if Sender = fEdBuildErrors then
+      ActiveControl := fLbBuildErrors
+    else if Sender = fEdBuildWarnings then
+      ActiveControl := fLbBuildWarnings;
+
+    Key := 0;
+    Exit;
+  end;
+
+  LbKeyDown(Sender, Key, Shift);
+end;
+
+procedure TMdcProblemsForm.ClearListBoxItems(aLb: TListBox; aFreeObjects: Boolean = True);
 var
   i: Integer;
 begin
   if aLb = nil then
     exit;
 
-  for i := 0 to aLb.Items.Count - 1 do
-    aLb.Items.Objects[i].Free;
+  if aFreeObjects then
+    for i := 0 to aLb.Items.Count - 1 do
+      aLb.Items.Objects[i].Free;
 
   aLb.Items.Clear;
+end;
+
+procedure TMdcProblemsForm.ClearBuildItems(var aItems: TArray<TMdcProblemItem>);
+var
+  lItem: TMdcProblemItem;
+begin
+  for lItem in aItems do
+    lItem.Free;
+
+  aItems := [];
+end;
+
+procedure TMdcProblemsForm.ApplyBuildFilterToList(
+  const aItems: TArray<TMdcProblemItem>; const aFilterText: string;
+  aList: TListBox; const aEmptyText: string; out aVisibleCount: Integer);
+var
+  lFilter: TFilterEx;
+  lItem: TMdcProblemItem;
+  lText: string;
+begin
+  aVisibleCount := 0;
+
+  if aList = nil then
+    Exit;
+
+  aList.Items.BeginUpdate;
+  try
+    ClearListBoxItems(aList, False);
+
+    if Length(aItems) = 0 then
+    begin
+      if aEmptyText <> '' then
+        aList.Items.Add(aEmptyText);
+      Exit;
+    end;
+
+    lFilter := TFilterEx.Create(aFilterText); // record, no free required
+
+    for lItem in aItems do
+    begin
+      lText := lItem.Text;
+      if lItem.FileName <> '' then
+        lText := lText + ' ' + lItem.FileName;
+
+      if lFilter.Matches(lText) then
+      begin
+        aList.Items.AddObject(lItem.Text, lItem);
+        Inc(aVisibleCount);
+      end;
+    end;
+
+    if aList.Items.Count > 0 then
+      aList.ItemIndex := 0;
+  finally
+    aList.Items.EndUpdate;
+  end;
+end;
+
+procedure TMdcProblemsForm.ApplyBuildFilters;
+var
+  lErrCount, lWarnCount: Integer;
+begin
+  if (fLbBuildErrors = nil) or (fLbBuildWarnings = nil) or
+     (fEdBuildErrors = nil) or (fEdBuildWarnings = nil) then
+    Exit;
+
+  if not fBuildMessagesAccessible then
+  begin
+    ClearListBoxItems(fLbBuildErrors, False);
+    ClearListBoxItems(fLbBuildWarnings, False);
+
+    fLbBuildErrors.Items.Add(SBuildMessagesUnavailable);
+    fLbBuildWarnings.Items.Add(SBuildMessagesUnavailable);
+
+    UpdateBuildTitles(0, 0);
+    Exit;
+  end;
+
+  ApplyBuildFilterToList(fBuildErrorItems, fEdBuildErrors.Text, fLbBuildErrors, SNoBuildErrors, lErrCount);
+  ApplyBuildFilterToList(fBuildWarningItems, fEdBuildWarnings.Text, fLbBuildWarnings, SNoBuildWarnings, lWarnCount);
+  UpdateBuildTitles(lErrCount, lWarnCount);
 end;
 
 function TMdcProblemsForm.SelectedItem(aLb: TListBox): TMdcProblemItem;
@@ -543,6 +717,23 @@ begin
     exit;
 
   Result := TMdcProblemItem(lObj);
+end;
+
+procedure TMdcProblemsForm.UpdateErrorInsightTitle(aCount: Integer);
+begin
+  if fLblEi = nil then
+    Exit;
+
+  fLblEi.Caption := Format(STitleWithCount, [SEiTitleBase, aCount]);
+end;
+
+procedure TMdcProblemsForm.UpdateBuildTitles(aErrCount, aWarnCount: Integer);
+begin
+  if fLblErr <> nil then
+    fLblErr.Caption := Format(STitleWithCount, [SBuildErrorsTitleBase, aErrCount]);
+
+  if fLblWarn <> nil then
+    fLblWarn.Caption := Format(STitleWithCount, [SBuildWarningsTitleBase, aWarnCount]);
 end;
 
 procedure TMdcProblemsForm.RefreshAll;
@@ -961,7 +1152,9 @@ begin
     end;
 
     if fLbErrorInsight.Items.Count = 0 then
-      fLbErrorInsight.Items.Add('(No Error Insight errors/warnings)');
+      fLbErrorInsight.Items.Add(SNoErrorInsight);
+
+    UpdateErrorInsightTitle(lCnt);
 
     if GMdcLoggingEnabled then
       MdcLog(Format('RefreshErrorInsight: %d items for %s', [lCnt, lFile]));
@@ -1400,6 +1593,9 @@ var
   lItem: TMdcProblemItem;
   lNorm: string;
   lErrCnt, lWarnCnt, lSkippedWarn, lSkippedErr: Integer;
+  lErrItems: TList<TMdcProblemItem>;
+  lWarnItems: TList<TMdcProblemItem>;
+  gE, gW: IGarbo;
 
   function StripDiagnosticPrefix(const s: string): string;
   var
@@ -1502,8 +1698,11 @@ var
   lKind: TMdcProblemKind;
   lLooseMsg: string;
 begin
-  ClearListBoxItems(fLbBuildErrors);
-  ClearListBoxItems(fLbBuildWarnings);
+  ClearBuildItems(fBuildErrorItems);
+  ClearBuildItems(fBuildWarningItems);
+
+  GC(lErrItems, TList<TMdcProblemItem>.Create, gE);
+  GC(lWarnItems, TList<TMdcProblemItem>.Create, gW);
 
   lErrCnt := 0;
   lWarnCnt := 0;
@@ -1519,10 +1718,10 @@ begin
     begin
       if lItem.kind = pkBuildError then
       begin
-        fLbBuildErrors.Items.addObject(lItem.Text, lItem);
+        lErrItems.Add(lItem);
         Inc(lErrCnt);
       end else begin
-        fLbBuildWarnings.Items.addObject(lItem.Text, lItem);
+        lWarnItems.Add(lItem);
         Inc(lWarnCnt);
       end;
       Continue;
@@ -1540,22 +1739,19 @@ begin
 
       if lKind = pkBuildError then
       begin
-        fLbBuildErrors.Items.addObject(lItem.Text, lItem);
+        lErrItems.Add(lItem);
         Inc(lErrCnt);
         Inc(lSkippedErr);
       end else begin
-        fLbBuildWarnings.Items.addObject(lItem.Text, lItem);
+        lWarnItems.Add(lItem);
         Inc(lWarnCnt);
         Inc(lSkippedWarn);
       end;
     end;
   end;
 
-  if fLbBuildErrors.Items.Count = 0 then
-    fLbBuildErrors.Items.Add('(No build errors found or not accessible)');
-
-  if fLbBuildWarnings.Items.Count = 0 then
-    fLbBuildWarnings.Items.Add('(No build warnings found or not accessible)');
+  fBuildErrorItems := lErrItems.ToArray;
+  fBuildWarningItems := lWarnItems.ToArray;
 
   if GMdcLoggingEnabled then
     MdcLog(Format('PopulateFromBuildText: errors=%d warnings=%d skippedErr=%d skippedWarn=%d',
@@ -1654,16 +1850,18 @@ begin
   begin
     if GMdcLoggingEnabled then
       MdcLog('RefreshBuildMessages: got message-view text len=' + IntToStr(Length(lText)));
+    fBuildMessagesAccessible := True;
     PopulateFromBuildText(lText);
+    ApplyBuildFilters;
     MdcLog('RefreshBuildMessages: ok');
     exit;
   end;
 
   // If this fails, we show a clear status (no clipboard fallback anymore).
-  ClearListBoxItems(fLbBuildErrors);
-  ClearListBoxItems(fLbBuildWarnings);
-  fLbBuildErrors.Items.Add('(Build messages not accessible right now)');
-  fLbBuildWarnings.Items.Add('(Build messages not accessible right now)');
+  fBuildMessagesAccessible := False;
+  ClearBuildItems(fBuildErrorItems);
+  ClearBuildItems(fBuildWarningItems);
+  ApplyBuildFilters;
   MdcLog('RefreshBuildMessages: FAILED');
 end;
 
