@@ -122,6 +122,8 @@ type
 
     procedure PopulateFromBuildText(const aText: string);
 
+    function TryGetSourceView(const aFileName: string; out aView: IOTAEditView): Boolean;
+
     function AppHook(var aMsg: TMessage): Boolean;
 
 
@@ -143,6 +145,28 @@ type
     function GetName: string;
   end;
 
+  TMdcBuildMessagesNotifier = class(TNotifierObject, IOTAIDENotifier, IOTAIDENotifier50, IOTAIDENotifier80)
+  private
+    procedure HandleAfterCompile(aIsCodeInsight: Boolean);
+    function CanRefresh: Boolean;
+  public
+    { IOTAIDENotifier }
+    procedure FileNotification(NotifyCode: TOTAFileNotification; const FileName: string; var Cancel: Boolean);
+    procedure BeforeCompile(const Project: IOTAProject; var Cancel: Boolean); overload;
+    procedure AfterCompile(Succeeded: Boolean); overload;
+    procedure AfterSave;
+    procedure BeforeSave;
+    procedure Destroyed;
+    procedure Modified;
+
+    { IOTAIDENotifier50 }
+    procedure BeforeCompile(const Project: IOTAProject; IsCodeInsight: Boolean; var Cancel: Boolean); overload;
+    procedure AfterCompile(Succeeded: Boolean; IsCodeInsight: Boolean); overload;
+
+    { IOTAIDENotifier80 }
+    procedure AfterCompile(const Project: IOTAProject; Succeeded: Boolean; IsCodeInsight: Boolean); overload;
+  end;
+
 const
   CWinKeyProblems = 'Problems.Dialog';
 
@@ -150,6 +174,9 @@ var
   GBindingIndex: Integer = -1;
   GBindingIntf: IOTAKeyboardBinding = nil;
   GProblemsForm: TMdcProblemsForm = nil;
+  GBuildNotifierIndex: Integer = -1;
+  GBuildNotifier: IOTAIDENotifier = nil;
+  GLastBuildRefreshTick: Cardinal = 0;
 
 procedure SendKeyCombo(const aVkMod, aVkKey: Word);
 var
@@ -1932,17 +1959,21 @@ begin
     Exit;
   end;
 
-  if not Supports(BorlandIDEServices, IOTAEditorServices, lEditor) then
+  lView := nil;
+  if not TryGetSourceView(lTargetFile, lView) then
   begin
-    MdcLog('JumpToItem: IOTAEditorServices not supported');
-    exit;
-  end;
+    if not Supports(BorlandIDEServices, IOTAEditorServices, lEditor) then
+    begin
+      MdcLog('JumpToItem: IOTAEditorServices not supported');
+      exit;
+    end;
 
-  lView := lEditor.TopView;
-  if lView = nil then
-  begin
-    MdcLog('JumpToItem: TopView=nil');
-    exit;
+    lView := lEditor.TopView;
+    if lView = nil then
+    begin
+      MdcLog('JumpToItem: TopView=nil');
+      exit;
+    end;
   end;
 
   lPos.Line := aItem.LineNo;
@@ -2023,33 +2054,137 @@ begin
   BindingResult := krHandled;
 end;
 
+function TMdcProblemsForm.TryGetSourceView(const aFileName: string; out aView: IOTAEditView): Boolean;
+var
+  lMods: IOTAModuleServices;
+  lMod: IOTAModule;
+  lEditor: IOTAEditor;
+  lSource: IOTASourceEditor;
+  i: Integer;
+  lCount: Integer;
+begin
+  Result := False;
+  aView := nil;
+
+  if not Supports(BorlandIDEServices, IOTAModuleServices, lMods) then
+    Exit;
+
+  lMod := lMods.FindModule(aFileName);
+  if lMod = nil then
+    lMod := lMods.OpenModule(aFileName);
+
+  if lMod = nil then
+    Exit;
+
+  try
+    lMod.ShowFilename(aFileName);
+  except
+  end;
+
+  lCount := lMod.ModuleFileCount;
+  for i := 0 to lCount - 1 do
+  begin
+    lEditor := lMod.ModuleFileEditors[i];
+    if Supports(lEditor, IOTASourceEditor, lSource) then
+    begin
+      lEditor.Show;
+      if lSource.EditViewCount > 0 then
+        aView := lSource.EditViews[0];
+      Result := aView <> nil;
+      Exit;
+    end;
+  end;
+end;
+
+{ TMdcBuildMessagesNotifier }
+
+function TMdcBuildMessagesNotifier.CanRefresh: Boolean;
+begin
+  Result := (GProblemsForm <> nil)
+    and GProblemsForm.Visible
+    and (GProblemsForm.WindowState <> wsMinimized);
+end;
+
+procedure TMdcBuildMessagesNotifier.HandleAfterCompile(aIsCodeInsight: Boolean);
+var
+  lNow: Cardinal;
+begin
+  if aIsCodeInsight then
+    Exit;
+
+  lNow := GetTickCount;
+  if (GLastBuildRefreshTick <> 0) and (lNow - GLastBuildRefreshTick < 800) then
+    Exit;
+  GLastBuildRefreshTick := lNow;
+
+  if not CanRefresh then
+    Exit;
+
+  TThread.Queue(nil,
+    procedure
+    begin
+      if (GProblemsForm <> nil) and GProblemsForm.Visible and (GProblemsForm.WindowState <> wsMinimized) then
+        GProblemsForm.RefreshBuildMessages;
+    end);
+end;
+
+procedure TMdcBuildMessagesNotifier.BeforeCompile(const Project: IOTAProject; IsCodeInsight: Boolean; var Cancel: Boolean);
+begin
+  if not IsCodeInsight then
+    GLastBuildRefreshTick := 0;
+end;
+
+procedure TMdcBuildMessagesNotifier.AfterCompile(const Project: IOTAProject; Succeeded: Boolean; IsCodeInsight: Boolean);
+begin
+  HandleAfterCompile(IsCodeInsight);
+end;
+
+procedure TMdcBuildMessagesNotifier.AfterCompile(Succeeded: Boolean; IsCodeInsight: Boolean);
+begin
+  HandleAfterCompile(IsCodeInsight);
+end;
+
+procedure TMdcBuildMessagesNotifier.FileNotification(NotifyCode: TOTAFileNotification; const FileName: string;
+  var Cancel: Boolean); begin end;
+procedure TMdcBuildMessagesNotifier.BeforeCompile(const Project: IOTAProject; var Cancel: Boolean); begin end;
+procedure TMdcBuildMessagesNotifier.AfterCompile(Succeeded: Boolean); begin end;
+procedure TMdcBuildMessagesNotifier.AfterSave; begin end;
+procedure TMdcBuildMessagesNotifier.BeforeSave; begin end;
+procedure TMdcBuildMessagesNotifier.Destroyed; begin end;
+procedure TMdcBuildMessagesNotifier.Modified; begin end;
+
 { TMdcFocusErrorInsight }
 
 class procedure TMdcFocusErrorInsight.Install;
 var
   lKS: IOTAKeyboardServices;
   lShortcut: TShortCut;
+  lServices: IOTAServices;
 begin
-  if (GBindingIndex >= 0) then
-    exit;
+  if (GBindingIndex < 0) and Supports(BorlandIDEServices, IOTAKeyboardServices, lKS) then
+  begin
+    TMdcSettings.LoadFocusErrorInsightShortcut(lShortcut);
+    if lShortcut <> 0 then
+    begin
+      GBindingIntf := TMdcProblemsKeyBinding.Create(lShortcut);
+      GBindingIndex := lKS.AddKeyboardBinding(GBindingIntf);
 
-  if not Supports(BorlandIDEServices, IOTAKeyboardServices, lKS) then
-    exit;
+      if GMdcLoggingEnabled then
+        MdcLog('Install: keyboard binding added idx=' + IntToStr(GBindingIndex));
+    end;
+  end;
 
-  TMdcSettings.LoadFocusErrorInsightShortcut(lShortcut);
-  if lShortcut = 0 then
-    exit;
-
-  GBindingIntf := TMdcProblemsKeyBinding.Create(lShortcut);
-  GBindingIndex := lKS.AddKeyboardBinding(GBindingIntf);
-
-  if GMdcLoggingEnabled then
-    MdcLog('Install: keyboard binding added idx=' + IntToStr(GBindingIndex));
+  if (GBuildNotifierIndex < 0) and Supports(BorlandIDEServices, IOTAServices, lServices) then
+  begin
+    GBuildNotifier := TMdcBuildMessagesNotifier.Create;
+    GBuildNotifierIndex := lServices.AddNotifier(GBuildNotifier);
+  end;
 end;
 
 class procedure TMdcFocusErrorInsight.Uninstall;
 var
   lKS: IOTAKeyboardServices;
+  lServices: IOTAServices;
 begin
   MdcLog('Uninstall: begin');
 
@@ -2066,6 +2201,18 @@ begin
 
   GBindingIndex := -1;
   GBindingIntf := nil;
+
+  if (GBuildNotifierIndex >= 0) and Supports(BorlandIDEServices, IOTAServices, lServices) then
+  begin
+    try
+      lServices.RemoveNotifier(GBuildNotifierIndex);
+    except
+      MdcLog('Uninstall: removing build notifier FAILED');
+    end;
+  end;
+
+  GBuildNotifierIndex := -1;
+  GBuildNotifier := nil;
 
   // IMPORTANT: free the form NOW (avoid timer messages hitting unloaded code later)
   if GProblemsForm <> nil then

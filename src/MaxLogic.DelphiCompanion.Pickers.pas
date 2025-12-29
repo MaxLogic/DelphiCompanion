@@ -86,6 +86,7 @@ type
     procedure FormShow(Sender: TObject);
 
     function SelectedItemIdx: Integer;
+    function SelectedFileNames: TArray<string>;
 
     procedure EditChange(Sender: TObject);
     procedure EditEnter(Sender: TObject);
@@ -930,6 +931,38 @@ begin
     Result := -1;
 end;
 
+function TMaxLogicPickerForm.SelectedFileNames: TArray<string>;
+var
+  lList: TList<string>;
+  gList: IGarbo;
+  lLi: TListItem;
+  lIdx: Integer;
+  lFn: string;
+begin
+  Result := [];
+
+  if (fList = nil) or (fList.SelCount <= 0) then
+    Exit;
+
+  GC(lList, TList<string>.Create, gList);
+
+  lLi := fList.GetNextItem(nil, sdAll, [isSelected]);
+  while lLi <> nil do
+  begin
+    lIdx := NativeInt(lLi.Data);
+    if (lIdx >= 0) and (lIdx <= High(fItems)) then
+    begin
+      lFn := fItems[lIdx].FileName;
+      if lFn.Trim <> '' then
+        lList.Add(lFn);
+    end;
+
+    lLi := fList.GetNextItem(lLi, sdAll, [isSelected]);
+  end;
+
+  Result := lList.ToArray;
+end;
+
 procedure TMaxLogicPickerForm.AdjustColumns;
 var
   lClientW: Integer;
@@ -1191,16 +1224,29 @@ class function TMaxLogicUnitPicker.TryPickAndOpen: Boolean;
 var
   f: TMaxLogicPickerForm;
   g: IGarbo;
-  fn: string;
+  lFiles: TArray<string>;
+  lFn: string;
 begin
   Result := False;
 
   GC(f, TMaxLogicPickerForm.CreatePicker(nil, SUnitsTitle, False), g);
 
-  if not f.PickFileName(fn) then
+  if f.ShowModal <> mrOk then
     Exit(False);
 
-  Result := TMdcIdeApi.OpenInIde(fn);
+  lFiles := f.SelectedFileNames;
+  if Length(lFiles) = 0 then
+    Exit(False);
+
+  Result := True;
+  for lFn in lFiles do
+  begin
+    if lFn.Trim = '' then
+      Continue;
+
+    if not TMdcIdeApi.OpenInIde(lFn) then
+      Result := False;
+  end;
 end;
 
 class procedure TMaxLogicUnitPicker.ShowModalPickAndOpen;
