@@ -24,13 +24,22 @@ type
     fKeyboardBindingIndex: Integer;
     fKeyboardBinding: IInterface;
 
+    fProjectsAction: TAction;
+    fUnitsAction: TAction;
+
     procedure InstallKeyboardBinding;
     procedure InstallKeyboardBindingWithShortCuts(aProjects: TShortCut; aUnits: TShortCut);
     procedure UninstallKeyboardBinding;
 
+    procedure InstallGlobalActions;
+    procedure UninstallGlobalActions;
+    procedure UpdateGlobalShortCuts(aProjects: TShortCut; aUnits: TShortCut);
+
     procedure InstallMenu;
     procedure UninstallMenu;
 
+    procedure ProjectsExecute(Sender: TObject);
+    procedure UnitsExecute(Sender: TObject);
     procedure OptionsExecute(Sender: TObject);
 
     function TryApplyShortCuts(aProjects: TShortCut; aUnits: TShortCut; out aError: string): Boolean;
@@ -45,6 +54,7 @@ uses
   Vcl.Dialogs,
   MaxLogic.DelphiCompanion.KeyboardBinding,
   MaxLogic.DelphiCompanion.OptionsForm,
+  MaxLogic.DelphiCompanion.Pickers,
   MaxLogic.DelphiCompanion.Settings;
 
 { TMdcMenuHolder }
@@ -69,13 +79,17 @@ begin
 
   fKeyboardBindingIndex := -1;
   fMenuHolder := nil;
+  fProjectsAction := nil;
+  fUnitsAction := nil;
 
   InstallKeyboardBinding;
   InstallMenu;
+  InstallGlobalActions;
 end;
 
 destructor TMdcIdeIntegration.Destroy;
 begin
+  UninstallGlobalActions;
   UninstallMenu;
   UninstallKeyboardBinding;
 
@@ -127,6 +141,7 @@ begin
   try
     UninstallKeyboardBinding;
     InstallKeyboardBindingWithShortCuts(aProjects, aUnits);
+    UpdateGlobalShortCuts(aProjects, aUnits);
     Result := True;
   except
     on E: Exception do
@@ -172,6 +187,58 @@ begin
   end;
 end;
 
+procedure TMdcIdeIntegration.InstallGlobalActions;
+var
+  lNta: INTAServices;
+  lProjects, lUnits: TShortCut;
+begin
+  if Supports(BorlandIDEServices, INTAServices, lNta) and (lNta.ActionList <> nil) then
+  begin
+    if fProjectsAction = nil then
+    begin
+      fProjectsAction := TAction.Create(nil);
+      fProjectsAction.Caption := 'MaxLogic Projects Picker';
+      fProjectsAction.OnExecute := ProjectsExecute;
+      fProjectsAction.ActionList := lNta.ActionList;
+    end;
+
+    if fUnitsAction = nil then
+    begin
+      fUnitsAction := TAction.Create(nil);
+      fUnitsAction.Caption := 'MaxLogic Units Picker';
+      fUnitsAction.OnExecute := UnitsExecute;
+      fUnitsAction.ActionList := lNta.ActionList;
+    end;
+
+    TMdcSettings.LoadShortCuts(lProjects, lUnits);
+    UpdateGlobalShortCuts(lProjects, lUnits);
+  end;
+end;
+
+procedure TMdcIdeIntegration.UninstallGlobalActions;
+begin
+  if fProjectsAction <> nil then
+  begin
+    fProjectsAction.ActionList := nil;
+    FreeAndNil(fProjectsAction);
+  end;
+
+  if fUnitsAction <> nil then
+  begin
+    fUnitsAction.ActionList := nil;
+    FreeAndNil(fUnitsAction);
+  end;
+end;
+
+procedure TMdcIdeIntegration.UpdateGlobalShortCuts(aProjects: TShortCut; aUnits: TShortCut);
+begin
+  if fProjectsAction <> nil then
+    fProjectsAction.ShortCut := aProjects;
+
+  if fUnitsAction <> nil then
+    fUnitsAction.ShortCut := aUnits;
+end;
+
 procedure TMdcIdeIntegration.OptionsExecute(Sender: TObject);
 var
   lErr: string;
@@ -192,5 +259,14 @@ begin
   end;
 end;
 
-end.
+procedure TMdcIdeIntegration.ProjectsExecute(Sender: TObject);
+begin
+  TMaxLogicProjectPicker.TryPickAndOpen;
+end;
 
+procedure TMdcIdeIntegration.UnitsExecute(Sender: TObject);
+begin
+  TMaxLogicUnitPicker.TryPickAndOpen;
+end;
+
+end.

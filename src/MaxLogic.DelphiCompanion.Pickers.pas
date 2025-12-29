@@ -201,6 +201,7 @@ var
   lKey: string;
   lItem: TMaxLogicPickItem;
 begin
+
   if aFileName.Trim = '' then
     Exit;
 
@@ -338,6 +339,25 @@ begin
   end;
 
   Result := lList.ToArray;
+end;
+
+function HasOpenProject: Boolean;
+var
+  lMods: IOTAModuleServices;
+  lProj: IOTAProject;
+  lGroup: IOTAProjectGroup;
+begin
+  Result := False;
+
+  if not Supports(BorlandIDEServices, IOTAModuleServices, lMods) then
+    Exit;
+
+  lProj := lMods.GetActiveProject;
+  if lProj <> nil then
+    Exit(True);
+
+  lGroup := lMods.MainProjectGroup;
+  Result := (lGroup <> nil) and (lGroup.ProjectCount > 0);
 end;
 
 function StripAccel(const aText: string): string;
@@ -1228,6 +1248,9 @@ var
   lFn: string;
 begin
   Result := False;
+
+  if not HasOpenProject then
+    Exit(False);
 
   GC(f, TMaxLogicPickerForm.CreatePicker(nil, SUnitsTitle, False), g);
 
