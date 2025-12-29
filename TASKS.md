@@ -20,3 +20,6 @@ Summary: When opening a project or group that is not part of the current group, 
 
 ### T-003 Make picker shortcuts global
 Summary: Ensure the projects picker shortcut works anywhere and the units picker shortcut works when a project is open.
+
+### T-004 Harden Problems dialog jump-to-code
+Summary: Ensure the Problems dialog consistently focuses the code editor and places the cursor on the reported line.

@@ -6,7 +6,7 @@ uses
   System.Classes, System.Types,
   Winapi.CommCtrl, Winapi.Messages, Winapi.Windows,
   Vcl.ComCtrls, Vcl.Forms, Vcl.StdCtrls,
-  ToolsAPI;
+  ToolsAPI, ToolsAPI.Editor;
 
 type
   TMdcFocusErrorInsight = class
@@ -1897,12 +1897,155 @@ var
   lEditor: IOTAEditorServices;
   lView: IOTAEditView;
   lView140: IOTAEditView140;
-  lEditWin: INTAEditWindow;
+  lCodeSvc: INTACodeEditorServices;
   lPos: TOTAEditPos;
   lMods: IOTAModuleServices;
   lMod: IOTAModule;
   lTargetFile: string;
   lOpened: Boolean;
+
+  function NormalizeFileName(const aFileName: string): string;
+  begin
+    Result := aFileName.Trim;
+    if Result = '' then
+      Exit('');
+
+    if TPath.IsPathRooted(Result) then
+      Result := ExpandFileName(Result);
+  end;
+
+  function SameFileName(const aLeft, aRight: string): Boolean;
+  begin
+    Result := SameText(NormalizeFileName(aLeft), NormalizeFileName(aRight));
+  end;
+
+  function TryGetTopViewForFile(out aView: IOTAEditView): Boolean;
+  var
+    lSvc: IOTAEditorServices;
+    lTop: IOTAEditView;
+    lTopBuf: IOTAEditBuffer;
+  begin
+    aView := nil;
+    Result := False;
+
+    if not Supports(BorlandIDEServices, IOTAEditorServices, lSvc) then
+      Exit;
+
+    lTop := lSvc.TopView;
+    if lTop = nil then
+      Exit;
+
+    lTopBuf := lTop.Buffer;
+    if (lTopBuf <> nil) and SameFileName(lTopBuf.FileName, lTargetFile) then
+    begin
+      aView := lTop;
+      Result := True;
+    end;
+  end;
+
+  function TryGetKnownViewForFile(out aView: IOTAEditView): Boolean;
+  var
+    lViews: TList<IOTAEditView>;
+    lKnownView: IOTAEditView;
+    lBuf: IOTAEditBuffer;
+  begin
+    aView := nil;
+    Result := False;
+
+    if not Supports(BorlandIDEServices, INTACodeEditorServices, lCodeSvc) then
+      Exit;
+
+    lViews := lCodeSvc.GetKnownViews;
+    if lViews = nil then
+      Exit;
+
+    try
+      for lKnownView in lViews do
+      begin
+        if lKnownView = nil then
+          Continue;
+
+        lBuf := lKnownView.Buffer;
+        if (lBuf <> nil) and SameFileName(lBuf.FileName, lTargetFile) then
+        begin
+          aView := lKnownView;
+          Result := True;
+          Exit;
+        end;
+      end;
+    finally
+      lViews.Free;
+    end;
+  end;
+
+  function TryGetViewForFile(out aView: IOTAEditView): Boolean;
+  begin
+    if TryGetSourceView(lTargetFile, aView) then
+      Exit(True);
+
+    if TryGetKnownViewForFile(aView) then
+      Exit(True);
+
+    Result := TryGetTopViewForFile(aView);
+  end;
+
+  procedure FocusView(const aView: IOTAEditView);
+  var
+    lCtrl: TWinControl;
+    lView140Local: IOTAEditView140;
+    lWin: INTAEditWindow;
+  begin
+    if Supports(BorlandIDEServices, INTACodeEditorServices, lCodeSvc) then
+    begin
+      lCtrl := lCodeSvc.GetEditorForView(aView);
+      if (lCtrl <> nil) and lCtrl.CanFocus then
+      begin
+        try
+          lCtrl.SetFocus;
+          MdcLog('JumpToItem: focused editor control');
+        except
+          MdcLog('JumpToItem: focusing editor control FAILED');
+        end;
+      end else begin
+        try
+          lCodeSvc.FocusTopEditor;
+          MdcLog('JumpToItem: FocusTopEditor called');
+        except
+          MdcLog('JumpToItem: FocusTopEditor FAILED');
+        end;
+      end;
+    end;
+
+    if Supports(aView, IOTAEditView140, lView140Local) then
+    begin
+      try
+        lWin := lView140Local.GetEditWindow;
+        if (lWin <> nil) and (lWin.Form <> nil) then
+        begin
+          lWin.Form.BringToFront;
+          if lWin.Form.HandleAllocated then
+          begin
+            SetForegroundWindow(lWin.Form.Handle);
+            SetActiveWindow(lWin.Form.Handle);
+          end;
+          if lWin.Form.CanFocus then
+            lWin.Form.SetFocus;
+          MdcLog('JumpToItem: focused INTAEditWindow.Form');
+        end else begin
+          MdcLog('JumpToItem: INTAEditWindow/Form missing');
+        end;
+      except
+        MdcLog('JumpToItem: focusing editor window FAILED');
+      end;
+    end else begin
+      try
+        if (application.MainForm <> nil) and application.MainForm.HandleAllocated then
+          SetForegroundWindow(application.MainForm.Handle);
+      except
+      end;
+      MdcLog('JumpToItem: IOTAEditView140 not supported, used fallback');
+    end;
+  end;
 begin
   if aItem = nil then
     exit;
@@ -1960,7 +2103,7 @@ begin
   end;
 
   lView := nil;
-  if not TryGetSourceView(lTargetFile, lView) then
+  if not TryGetViewForFile(lView) then
   begin
     if not Supports(BorlandIDEServices, IOTAEditorServices, lEditor) then
     begin
@@ -1978,44 +2121,22 @@ begin
 
   lPos.Line := aItem.LineNo;
   lPos.col := aItem.ColNo;
+  if lPos.Line < 1 then
+    lPos.Line := 1;
+  if lPos.Col < 1 then
+    lPos.Col := 1;
+
   try
     lView.CursorPos := lPos;
+    if Supports(lView, IOTAEditView140, lView140) then
+      lView140.MoveCursorToView;
     lView.MoveViewToCursor;
     MdcLog('JumpToItem: CursorPos set + MoveViewToCursor ok');
   except
     MdcLog('JumpToItem: setting CursorPos FAILED');
   end;
 
-  // Hard focus to editor window if possible (Delphi 12+)
-  if Supports(lView, IOTAEditView140, lView140) then
-  begin
-    try
-      lEditWin := lView140.GetEditWindow;
-      if (lEditWin <> nil) and (lEditWin.Form <> nil) then
-      begin
-        lEditWin.Form.bringToFront;
-        if lEditWin.Form.HandleAllocated then
-        begin
-          SetForegroundWindow(lEditWin.Form.Handle);
-          SetActiveWindow(lEditWin.Form.Handle);
-        end;
-        lEditWin.Form.SetFocus;
-        MdcLog('JumpToItem: focused INTAEditWindow.Form');
-      end else begin
-        MdcLog('JumpToItem: INTAEditWindow/Form missing');
-      end;
-    except
-      MdcLog('JumpToItem: focusing editor window FAILED');
-    end;
-  end else begin
-    // fallback: at least bring IDE front
-    try
-      if (application.MainForm <> nil) and application.MainForm.HandleAllocated then
-        SetForegroundWindow(application.MainForm.Handle);
-    except
-    end;
-    MdcLog('JumpToItem: IOTAEditView140 not supported, used fallback');
-  end;
+  FocusView(lView);
 end;
 
 
