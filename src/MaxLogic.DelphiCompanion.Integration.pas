@@ -54,6 +54,7 @@ uses
   Vcl.Dialogs,
   MaxLogic.DelphiCompanion.KeyboardBinding,
   MaxLogic.DelphiCompanion.OptionsForm,
+  MaxLogic.DelphiCompanion.FocusErrorInsight,
   MaxLogic.DelphiCompanion.Pickers,
   MaxLogic.DelphiCompanion.Settings;
 
@@ -252,6 +253,12 @@ begin
     TMdcSettings.LoadShortCuts(lNewProjects, lNewUnits);
     if TryApplyShortCuts(lNewProjects, lNewUnits, lErr) then
     begin
+      try
+        TMdcFocusErrorInsight.Uninstall;
+        TMdcFocusErrorInsight.Install;
+      except
+        // ignore
+      end;
       Exit;
     end else begin
       MessageDlg('Shortcuts could not be registered:' + sLineBreak + lErr, mtError, [mbOK], 0);

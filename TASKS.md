@@ -23,3 +23,6 @@ Summary: Ensure the projects picker shortcut works anywhere and the units picker
 
 ### T-004 Harden Problems dialog jump-to-code
 Summary: Ensure the Problems dialog consistently focuses the code editor and places the cursor on the reported line.
+
+### T-005 Make Problems dialog shortcut global
+Summary: Ensure the Problems dialog shortcut works from any IDE pane and focuses the editor after jumps.

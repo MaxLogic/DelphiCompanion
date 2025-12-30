@@ -19,7 +19,7 @@ implementation
 
 uses
   System.Generics.Collections, System.IOUtils, System.Rtti, System.StrUtils, System.SysUtils, System.TypInfo,
-  Vcl.ClipBrd, Vcl.Controls, Vcl.ExtCtrls, Vcl.Graphics,
+  Vcl.ActnList, Vcl.ClipBrd, Vcl.Controls, Vcl.ExtCtrls, Vcl.Graphics,
   AutoFree, maxLogic.StrUtils, maxLogic.DelphiCompanion.IdeApi, maxLogic.DelphiCompanion.IdeUiInspector,
   maxLogic.DelphiCompanion.Logger, maxLogic.DelphiCompanion.Providers,
   maxLogic.DelphiCompanion.Settings;
@@ -145,10 +145,16 @@ type
     function GetName: string;
   end;
 
+  TMdcProblemsActionHandler = class
+  public
+    procedure Execute(Sender: TObject);
+  end;
+
   TMdcBuildMessagesNotifier = class(TNotifierObject, IOTAIDENotifier, IOTAIDENotifier50, IOTAIDENotifier80)
   private
     procedure HandleAfterCompile(aIsCodeInsight: Boolean);
     function CanRefresh: Boolean;
+    procedure QueueRefresh;
   public
     { IOTAIDENotifier }
     procedure FileNotification(NotifyCode: TOTAFileNotification; const FileName: string; var Cancel: Boolean);
@@ -173,6 +179,8 @@ const
 var
   GBindingIndex: Integer = -1;
   GBindingIntf: IOTAKeyboardBinding = nil;
+  GProblemsAction: TAction = nil;
+  GProblemsActionHandler: TMdcProblemsActionHandler = nil;
   GProblemsForm: TMdcProblemsForm = nil;
   GBuildNotifierIndex: Integer = -1;
   GBuildNotifier: IOTAIDENotifier = nil;
@@ -1980,10 +1988,10 @@ var
 
   function TryGetViewForFile(out aView: IOTAEditView): Boolean;
   begin
-    if TryGetSourceView(lTargetFile, aView) then
+    if TryGetKnownViewForFile(aView) then
       Exit(True);
 
-    if TryGetKnownViewForFile(aView) then
+    if TryGetSourceView(lTargetFile, aView) then
       Exit(True);
 
     Result := TryGetTopViewForFile(aView);
@@ -1995,6 +2003,15 @@ var
     lView140Local: IOTAEditView140;
     lWin: INTAEditWindow;
   begin
+    if Supports(aView, IOTAEditView140, lView140Local) then
+    begin
+      try
+        lView140Local.MoveCursorToView;
+      except
+        MdcLog('JumpToItem: MoveCursorToView FAILED');
+      end;
+    end;
+
     if Supports(BorlandIDEServices, INTACodeEditorServices, lCodeSvc) then
     begin
       lCtrl := lCodeSvc.GetEditorForView(aView);
@@ -2044,6 +2061,16 @@ var
       except
       end;
       MdcLog('JumpToItem: IOTAEditView140 not supported, used fallback');
+    end;
+
+    if Supports(BorlandIDEServices, INTACodeEditorServices, lCodeSvc) then
+    begin
+      try
+        lCodeSvc.FocusTopEditor;
+        MdcLog('JumpToItem: FocusTopEditor (final) called');
+      except
+        MdcLog('JumpToItem: FocusTopEditor (final) FAILED');
+      end;
     end;
   end;
 begin
@@ -2175,6 +2202,56 @@ begin
   BindingResult := krHandled;
 end;
 
+procedure TMdcProblemsActionHandler.Execute(Sender: TObject);
+begin
+  TMdcProblemsForm.ShowSingleton;
+end;
+
+procedure UpdateProblemsActionShortCut;
+var
+  lShortcut: TShortCut;
+begin
+  if GProblemsAction = nil then
+    Exit;
+
+  TMdcSettings.LoadFocusErrorInsightShortcut(lShortcut);
+  GProblemsAction.ShortCut := lShortcut;
+end;
+
+procedure InstallProblemsAction;
+var
+  lNta: INTAServices;
+begin
+  if Supports(BorlandIDEServices, INTAServices, lNta) and (lNta.ActionList <> nil) then
+  begin
+    if GProblemsAction = nil then
+    begin
+      GProblemsAction := TAction.Create(nil);
+      GProblemsAction.Caption := 'MaxLogic Problems Dialog';
+      GProblemsAction.ActionList := lNta.ActionList;
+    end;
+
+    if GProblemsActionHandler = nil then
+      GProblemsActionHandler := TMdcProblemsActionHandler.Create;
+
+    GProblemsAction.OnExecute := GProblemsActionHandler.Execute;
+
+    UpdateProblemsActionShortCut;
+  end;
+end;
+
+procedure UninstallProblemsAction;
+begin
+  if GProblemsAction <> nil then
+  begin
+    GProblemsAction.OnExecute := nil;
+    GProblemsAction.ActionList := nil;
+    FreeAndNil(GProblemsAction);
+  end;
+
+  FreeAndNil(GProblemsActionHandler);
+end;
+
 function TMdcProblemsForm.TryGetSourceView(const aFileName: string; out aView: IOTAEditView): Boolean;
 var
   lMods: IOTAModuleServices;
@@ -2241,12 +2318,13 @@ begin
   if not CanRefresh then
     Exit;
 
-  TThread.Queue(nil,
-    procedure
-    begin
-      if (GProblemsForm <> nil) and GProblemsForm.Visible and (GProblemsForm.WindowState <> wsMinimized) then
-        GProblemsForm.RefreshBuildMessages;
-    end);
+  TThread.Queue(nil, QueueRefresh);
+end;
+
+procedure TMdcBuildMessagesNotifier.QueueRefresh;
+begin
+  if (GProblemsForm <> nil) and GProblemsForm.Visible and (GProblemsForm.WindowState <> wsMinimized) then
+    GProblemsForm.RefreshBuildMessages;
 end;
 
 procedure TMdcBuildMessagesNotifier.BeforeCompile(const Project: IOTAProject; IsCodeInsight: Boolean; var Cancel: Boolean);
@@ -2282,6 +2360,8 @@ var
   lShortcut: TShortCut;
   lServices: IOTAServices;
 begin
+  InstallProblemsAction;
+
   if (GBindingIndex < 0) and Supports(BorlandIDEServices, IOTAKeyboardServices, lKS) then
   begin
     TMdcSettings.LoadFocusErrorInsightShortcut(lShortcut);
@@ -2308,6 +2388,8 @@ var
   lServices: IOTAServices;
 begin
   MdcLog('Uninstall: begin');
+
+  UninstallProblemsAction;
 
   if (GBindingIndex >= 0) and Supports(BorlandIDEServices, IOTAKeyboardServices, lKS) then
   begin

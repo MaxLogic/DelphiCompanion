@@ -13,3 +13,4 @@ All notable user-visible changes to this project will be documented in this file
 - Units picker opens `.pas` in the source editor view instead of the form designer. (T-001)
 - Picker shortcuts now work outside the editor; units picker only opens when a project is available. (T-003)
 - Problems dialog jump-to-code now consistently focuses the editor and positions the cursor. (T-004)
+- Problems dialog shortcut now works from any IDE pane and editor focus is enforced after jumps. (T-005)
