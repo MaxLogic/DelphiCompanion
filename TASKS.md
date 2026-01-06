@@ -26,3 +26,6 @@ Summary: Ensure the Problems dialog consistently focuses the code editor and pla
 
 ### T-005 Make Problems dialog shortcut global
 Summary: Ensure the Problems dialog shortcut works from any IDE pane and focuses the editor after jumps.
+
+### T-006 Fix Problems dialog column jumps
+Summary: Convert character columns from build/error insight into editor columns so jumps land on the correct position, even with tabs.

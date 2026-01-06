@@ -1543,10 +1543,13 @@ var
   lParen1, lParen2: Integer;
   lFilePart: string;
   lLineNo: Integer;
+  lColNo: Integer;
   lMsg: string;
   lUnitName: string;
   lIsError, lIsWarning: Boolean;
   lAfterParen: Integer;
+  lLoc: string;
+  lComma: Integer;
 begin
   aItem := nil;
   Result := False;
@@ -1590,7 +1593,19 @@ begin
     exit;
 
   lFilePart := Trim(copy(lRest, 1, lParen1 - 1));
-  lLineNo := SafeInt(copy(lRest, lParen1 + 1, lParen2 - lParen1 - 1), 0);
+  lLoc := Trim(copy(lRest, lParen1 + 1, lParen2 - lParen1 - 1));
+
+  lLineNo := 0;
+  lColNo := 1;
+
+  lComma := Pos(',', lLoc);
+  if lComma > 0 then
+  begin
+    lLineNo := SafeInt(Copy(lLoc, 1, lComma - 1), 0);
+    lColNo := SafeInt(Copy(lLoc, lComma + 1, MaxInt), 1);
+  end else
+    lLineNo := SafeInt(lLoc, 0);
+
   if (lFilePart = '') or (lLineNo <= 0) then
     exit;
 
@@ -1606,7 +1621,9 @@ begin
   aItem := TMdcProblemItem.Create;
   aItem.FileName := lFilePart;
   aItem.LineNo := lLineNo;
-  aItem.ColNo := 1;
+  if lColNo < 1 then
+    lColNo := 1;
+  aItem.ColNo := lColNo;
   lUnitName := ChangeFileExt(ExtractFileName(lFilePart), '');
 
   if lIsError then
@@ -1907,6 +1924,7 @@ var
   lView140: IOTAEditView140;
   lCodeSvc: INTACodeEditorServices;
   lPos: TOTAEditPos;
+  lPosObj: IOTAEditPosition;
   lMods: IOTAModuleServices;
   lMod: IOTAModule;
   lTargetFile: string;
@@ -2000,18 +2018,8 @@ var
   procedure FocusView(const aView: IOTAEditView);
   var
     lCtrl: TWinControl;
-    lView140Local: IOTAEditView140;
     lWin: INTAEditWindow;
   begin
-    if Supports(aView, IOTAEditView140, lView140Local) then
-    begin
-      try
-        lView140Local.MoveCursorToView;
-      except
-        MdcLog('JumpToItem: MoveCursorToView FAILED');
-      end;
-    end;
-
     if Supports(BorlandIDEServices, INTACodeEditorServices, lCodeSvc) then
     begin
       lCtrl := lCodeSvc.GetEditorForView(aView);
@@ -2033,10 +2041,10 @@ var
       end;
     end;
 
-    if Supports(aView, IOTAEditView140, lView140Local) then
+    if Supports(aView, IOTAEditView140, lView140) then
     begin
       try
-        lWin := lView140Local.GetEditWindow;
+        lWin := lView140.GetEditWindow;
         if (lWin <> nil) and (lWin.Form <> nil) then
         begin
           lWin.Form.BringToFront;
@@ -2062,16 +2070,50 @@ var
       end;
       MdcLog('JumpToItem: IOTAEditView140 not supported, used fallback');
     end;
+  end;
 
-    if Supports(BorlandIDEServices, INTACodeEditorServices, lCodeSvc) then
+  function CalcCursorPos(const aView: IOTAEditView; const aItem: TMdcProblemItem): TOTAEditPos;
+  var
+    lView40: IOTAEditView40;
+    lCharPos: TOTACharPos;
+    lUseConvert: Boolean;
+    lRaw: TOTAEditPos;
+  begin
+    lRaw.Line := aItem.LineNo;
+    lRaw.Col := aItem.ColNo;
+
+    if lRaw.Line < 1 then
+      lRaw.Line := 1;
+    if lRaw.Col < 1 then
+      lRaw.Col := 1;
+
+    Result := lRaw;
+
+    lCharPos.Line := Result.Line;
+    lCharPos.CharIndex := Result.Col - 1;
+
+    // Error Insight columns are CharIndex-based; only convert those (tabs-safe).
+    lUseConvert := (aItem.kind in [pkErrorInsightError, pkErrorInsightWarning])
+      and Supports(aView, IOTAEditView40, lView40);
+
+    if GMdcLoggingEnabled then
+      MdcLog(Format('JumpToItem: raw pos Line=%d Col=%d kind=%d useConvert=%s',
+        [lRaw.Line, lRaw.Col, Ord(aItem.kind), BoolToStr(lUseConvert, True)]));
+
+    if lUseConvert then
     begin
       try
-        lCodeSvc.FocusTopEditor;
-        MdcLog('JumpToItem: FocusTopEditor (final) called');
+        lView40.ConvertPos(False, Result, lCharPos); // CharPos -> EditPos
+        if GMdcLoggingEnabled then
+          MdcLog(Format('JumpToItem: converted pos Line=%d Col=%d (from CharIndex=%d)',
+            [Result.Line, Result.Col, lCharPos.CharIndex]));
       except
-        MdcLog('JumpToItem: FocusTopEditor (final) FAILED');
+        MdcLog('JumpToItem: ConvertPos failed, using raw column');
       end;
     end;
+
+    if Result.Col < 1 then
+      Result.Col := 1;
   end;
 begin
   if aItem = nil then
@@ -2146,24 +2188,49 @@ begin
     end;
   end;
 
-  lPos.Line := aItem.LineNo;
-  lPos.col := aItem.ColNo;
-  if lPos.Line < 1 then
-    lPos.Line := 1;
-  if lPos.Col < 1 then
-    lPos.Col := 1;
+  if GMdcLoggingEnabled and (lView <> nil) then
+    MdcLog(Format('JumpToItem: using view buffer="%s"', [lView.Buffer.FileName]));
+
+  lPos := CalcCursorPos(lView, aItem);
+
+  // Activate the view before moving the caret to avoid the IDE restoring an old cursor position.
+  FocusView(lView);
+
+  lPosObj := nil;
+  if lView <> nil then
+    lPosObj := lView.Position;
+
+  if GMdcLoggingEnabled and (lPosObj <> nil) then
+    MdcLog(Format('JumpToItem: view row info before move -> Row=%d Col=%d LastRow=%d',
+      [lPosObj.Row, lPosObj.Column, lPosObj.LastRow]));
 
   try
-    lView.CursorPos := lPos;
+    if (lPosObj <> nil) then
+    begin
+      if not lPosObj.Move(lPos.Line, lPos.Col) then
+        MdcLog('JumpToItem: Position.Move failed, will still MoveViewToCursor');
+      lPos.Line := lPosObj.Row;
+      lPos.Col := lPosObj.Column;
+    end else begin
+      lView.CursorPos := lPos;
+    end;
+
     if Supports(lView, IOTAEditView140, lView140) then
       lView140.MoveCursorToView;
     lView.MoveViewToCursor;
-    MdcLog('JumpToItem: CursorPos set + MoveViewToCursor ok');
+
+    if GMdcLoggingEnabled then
+    begin
+      if lPosObj <> nil then
+        MdcLog(Format('JumpToItem: after Move -> Row=%d Col=%d LastRow=%d buffer="%s"',
+          [lPosObj.Row, lPosObj.Column, lPosObj.LastRow, lView.Buffer.FileName]))
+      else
+        MdcLog(Format('JumpToItem: CursorPos set -> Line=%d Col=%d; view buffer="%s"',
+          [lView.CursorPos.Line, lView.CursorPos.Col, lView.Buffer.FileName]));
+    end;
   except
     MdcLog('JumpToItem: setting CursorPos FAILED');
   end;
-
-  FocusView(lView);
 end;
 
 
