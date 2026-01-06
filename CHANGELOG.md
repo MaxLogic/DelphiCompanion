@@ -5,6 +5,7 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- Problems dialog now copies selected entries with Ctrl+C in an AI-friendly text format. (T-007)
 
 ### Changed
 - Project/group opening now avoids merging into the current project group when the target is not part of it. (T-002)

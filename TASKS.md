@@ -29,3 +29,6 @@ Summary: Ensure the Problems dialog shortcut works from any IDE pane and focuses
 
 ### T-006 Fix Problems dialog column jumps
 Summary: Convert character columns from build/error insight into editor columns so jumps land on the correct position, even with tabs.
+
+### T-007 Copy Problems items
+Summary: Allow copying selected Problems dialog entries to the clipboard (Ctrl+C) in an AI-friendly format.

@@ -91,6 +91,7 @@ type
     procedure ClearListBoxItems(aLb: TListBox; aFreeObjects: Boolean = True);
     procedure ClearBuildItems(var aItems: TArray<TMdcProblemItem>);
     function SelectedItem(aLb: TListBox): TMdcProblemItem;
+    procedure CopySelectionToClipboard(aLb: TListBox);
 
     procedure BuildFilterChange(Sender: TObject);
     procedure BuildFilterKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
@@ -239,6 +240,7 @@ begin
   fLbErrorInsight.Parent := self;
   fLbErrorInsight.Anchors := [akLeft, akTop, akBottom];
   fLbErrorInsight.IntegralHeight := False;
+  fLbErrorInsight.MultiSelect := True;
   fLbErrorInsight.OnDblClick := LbDblClick;
   fLbErrorInsight.OnKeyDown := LbKeyDown;
   fLbErrorInsight.TabStop := True;
@@ -253,6 +255,7 @@ begin
   fLbBuildErrors.Parent := self;
   fLbBuildErrors.Anchors := [akLeft, akTop, akBottom];
   fLbBuildErrors.IntegralHeight := False;
+  fLbBuildErrors.MultiSelect := True;
   fLbBuildErrors.OnDblClick := LbDblClick;
   fLbBuildErrors.OnKeyDown := LbKeyDown;
   fLbBuildErrors.TabStop := True;
@@ -274,6 +277,7 @@ begin
   fLbBuildWarnings.Parent := self;
   fLbBuildWarnings.Anchors := [akLeft, akTop, akBottom, akRight];
   fLbBuildWarnings.IntegralHeight := False;
+  fLbBuildWarnings.MultiSelect := True;
   fLbBuildWarnings.OnDblClick := LbDblClick;
   fLbBuildWarnings.OnKeyDown := LbKeyDown;
   fLbBuildWarnings.TabStop := True;
@@ -611,6 +615,13 @@ begin
     exit;
   end;
 
+  if (Key = Ord('C')) and (ssCtrl in Shift) and (Sender is TListBox) then
+  begin
+    CopySelectionToClipboard(TListBox(Sender));
+    Key := 0;
+    exit;
+  end;
+
   if (Key = VK_RETURN) and (Sender is TListBox) then
   begin
     lItem := SelectedItem(TListBox(Sender));
@@ -752,6 +763,55 @@ begin
     exit;
 
   Result := TMdcProblemItem(lObj);
+end;
+
+procedure TMdcProblemsForm.CopySelectionToClipboard(aLb: TListBox);
+const
+  cFmt = '%s(%d,%d): %s - %s';
+var
+  lLines: TStringList;
+  g: IGarbo;
+  i: Integer;
+  lItem: TMdcProblemItem;
+  lKind: string;
+begin
+  if aLb = nil then
+    Exit;
+
+  if aLb.SelCount = 0 then
+    Exit;
+
+  GC(lLines, TStringList.Create, g);
+
+  for i := 0 to aLb.Items.Count - 1 do
+  begin
+    if not aLb.Selected[i] then
+      Continue;
+
+    lItem := TMdcProblemItem(aLb.Items.Objects[i]);
+    if lItem = nil then
+      Continue;
+
+    case lItem.kind of
+      pkErrorInsightError:   lKind := 'ErrorInsightError';
+      pkErrorInsightWarning: lKind := 'ErrorInsightWarning';
+      pkBuildError:          lKind := 'BuildError';
+      pkBuildWarning:        lKind := 'BuildWarning';
+    else
+      lKind := 'Unknown';
+    end;
+
+    lLines.Add(Format(cFmt,
+      [lItem.FileName, lItem.LineNo, lItem.ColNo, lKind, lItem.Text]));
+  end;
+
+  if lLines.Count = 0 then
+    Exit;
+
+  ClipBoard.AsText := lLines.Text;
+
+  if GMdcLoggingEnabled then
+    MdcLog(Format('CopySelectionToClipboard: copied %d line(s)', [lLines.Count]));
 end;
 
 procedure TMdcProblemsForm.UpdateErrorInsightTitle(aCount: Integer);
