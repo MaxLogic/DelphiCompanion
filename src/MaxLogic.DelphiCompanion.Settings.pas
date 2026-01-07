@@ -24,8 +24,8 @@ type
     class procedure LoadUnitsPickerOptions(out aScope: Integer; out aIncludeSearchPaths: Boolean); static;
     class procedure SaveUnitsPickerOptions(aScope: Integer; aIncludeSearchPaths: Boolean); static;
 
-    class procedure LoadProjectsPickerOptions(out aSortAlpha: Boolean; out aFavoritesFirst: Boolean); static;
-    class procedure SaveProjectsPickerOptions(aSortAlpha: Boolean; aFavoritesFirst: Boolean); static;
+    class procedure LoadProjectsPickerOptions(out aSortAlpha: Boolean; out aFavoritesFirst: Boolean; out aFilterIncludePath: Boolean); static;
+    class procedure SaveProjectsPickerOptions(aSortAlpha: Boolean; aFavoritesFirst: Boolean; aFilterIncludePath: Boolean); static;
 
     class procedure LoadCompileSounds(out aEnabled: Boolean; out aOkSound: string; out aFailSound: string); static;
     class procedure SaveCompileSounds(aEnabled: Boolean; const aOkSound: string; const aFailSound: string); static;
@@ -70,6 +70,7 @@ const
   CIniSectionProjectsPicker = 'Picker.Projects';
   CIniKeyProjectsSortAlpha = 'SortAlpha';
   CIniKeyProjectsFavoritesFirst = 'FavoritesFirst';
+  CIniKeyProjectsFilterIncludePath = 'FilterIncludePath';
 
 
   CIniSectionCompileSounds = 'CompileSounds';
@@ -313,7 +314,7 @@ begin
   lIni.UpdateFile;
 end;
 
-class procedure TMdcSettings.LoadProjectsPickerOptions(out aSortAlpha: Boolean; out aFavoritesFirst: Boolean);
+class procedure TMdcSettings.LoadProjectsPickerOptions(out aSortAlpha: Boolean; out aFavoritesFirst: Boolean; out aFilterIncludePath: Boolean);
 var
   lIni: TMemIniFile;
   g: IGarbo;
@@ -321,6 +322,7 @@ var
 begin
   aSortAlpha := False;
   aFavoritesFirst := True;
+  aFilterIncludePath := False;
 
   lIniName := GetConfigFileName;
   if not FileExists(lIniName) then
@@ -331,9 +333,10 @@ begin
 
   aSortAlpha := lIni.ReadBool(CIniSectionProjectsPicker, CIniKeyProjectsSortAlpha, aSortAlpha);
   aFavoritesFirst := lIni.ReadBool(CIniSectionProjectsPicker, CIniKeyProjectsFavoritesFirst, aFavoritesFirst);
+  aFilterIncludePath := lIni.ReadBool(CIniSectionProjectsPicker, CIniKeyProjectsFilterIncludePath, aFilterIncludePath);
 end;
 
-class procedure TMdcSettings.SaveProjectsPickerOptions(aSortAlpha: Boolean; aFavoritesFirst: Boolean);
+class procedure TMdcSettings.SaveProjectsPickerOptions(aSortAlpha: Boolean; aFavoritesFirst: Boolean; aFilterIncludePath: Boolean);
 var
   lIni: TMemIniFile;
   g: IGarbo;
@@ -350,6 +353,7 @@ begin
 
   lIni.WriteBool(CIniSectionProjectsPicker, CIniKeyProjectsSortAlpha, aSortAlpha);
   lIni.WriteBool(CIniSectionProjectsPicker, CIniKeyProjectsFavoritesFirst, aFavoritesFirst);
+  lIni.WriteBool(CIniSectionProjectsPicker, CIniKeyProjectsFilterIncludePath, aFilterIncludePath);
   lIni.UpdateFile;
 end;
 

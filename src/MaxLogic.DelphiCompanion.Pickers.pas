@@ -124,6 +124,7 @@ type
     fCbShowProjectGroups: TCheckBox;
     fCbShowFavorites: TCheckBox;
     fCbShowNonFavorites: TCheckBox;
+    fCbFilterIncludePath: TCheckBox;
 
     procedure CreateSortProjectsGroupGui;
     procedure CreateShowProjectsGroupGui;
@@ -697,7 +698,7 @@ begin
 
   if fIsProjects then
   begin
-    // Project picker: two option groups (Sorting + Show)
+    // Project picker: two option groups (Sorting + Filter)
     fBottom.Height := ScaleValue(56);
 
     CreateSortProjectsGroupGui;
@@ -1149,7 +1150,11 @@ begin
     for i := 0 to High(fItems) do
     begin
       lItem := fItems[i];
-      s := lItem.Display + ' ' + lItem.Detail + ' ' + lItem.FileName;
+
+      if fIsProjects and (fCbFilterIncludePath <> nil) and (not fCbFilterIncludePath.Checked) then
+        s := lItem.Display
+      else
+        s := lItem.Display + ' ' + lItem.Detail + ' ' + lItem.FileName;
 
       if lFilter.Matches(s) then
       begin
@@ -1286,8 +1291,7 @@ begin
   if fLoadingOptions then
     Exit;
 
-  // Next step: apply show/sort options to fItems
-  // For now: just re-run filter to reflect caption/hide logic once you add it.
+  // Apply show/sort options to the source list, then re-run filter.
   LoadItems;
   ApplyFilter;
 
@@ -1338,12 +1342,14 @@ begin
 end;
 
 procedure TMaxLogicPickerForm.CreateShowProjectsGroupGui;
+var
+  lSpacer: TPanel;
 begin
   fShowBox := TGroupBox.Create(Self);
   fShowBox.Parent := fBottom;
   fShowBox.Align := alClient;
   fShowBox.AlignWithMargins := True;
-  fShowBox.Caption := '&Show';
+  fShowBox.Caption := '&Filter';
   fShowBox.TabStop := False;
 
   fShowFlow := TFlowPanel.Create(Self);
@@ -1371,34 +1377,48 @@ begin
   fCbShowNonFavorites.Parent := fShowFlow;
   fCbShowNonFavorites.Caption := 'Non-favo&rite'; // Alt+R (avoid Alt+F/Alt+V conflicts)
 
+  lSpacer := TPanel.Create(Self);
+  lSpacer.Parent := fShowFlow;
+  lSpacer.BevelOuter := bvNone;
+  lSpacer.Width := ScaleValue(12);
+
+  fCbFilterIncludePath := TCheckBox.Create(Self);
+  fCbFilterIncludePath.Parent := fShowFlow;
+  fCbFilterIncludePath.Caption := 'Include pat&h'; // Alt+H
+
   // ---- defaults FIRST
   fCbShowProjects.Checked := True;
   fCbShowProjectGroups.Checked := True;
   fCbShowFavorites.Checked := True;
   fCbShowNonFavorites.Checked := True;
+  fCbFilterIncludePath.Checked := False;
 
   // ---- wire handlers LAST
   fCbShowProjects.OnClick := ProjectsOptionsClick;
   fCbShowProjectGroups.OnClick := ProjectsOptionsClick;
   fCbShowFavorites.OnClick := ProjectsOptionsClick;
   fCbShowNonFavorites.OnClick := ProjectsOptionsClick;
+  fCbFilterIncludePath.OnClick := ProjectsOptionsClick;
 end;
 
 procedure TMaxLogicPickerForm.LoadProjectPickerPrefs;
 var
   lSortAlpha: Boolean;
   lFavoritesFirst: Boolean;
+  lFilterIncludePath: Boolean;
 begin
   if not fIsProjects then
     Exit;
 
-  TMdcSettings.LoadProjectsPickerOptions(lSortAlpha, lFavoritesFirst);
+  TMdcSettings.LoadProjectsPickerOptions(lSortAlpha, lFavoritesFirst, lFilterIncludePath);
 
   fLoadingOptions := True;
   try
     fRbSortAlpha.Checked := lSortAlpha;
     fRbSortLast.Checked := not lSortAlpha;
     fCbFavoriteFirst.Checked := lFavoritesFirst;
+    if fCbFilterIncludePath <> nil then
+      fCbFilterIncludePath.Checked := lFilterIncludePath;
   finally
     fLoadingOptions := False;
   end;
@@ -1409,7 +1429,7 @@ begin
   if not fIsProjects then
     Exit;
 
-  TMdcSettings.SaveProjectsPickerOptions(fRbSortAlpha.Checked, fCbFavoriteFirst.Checked);
+  TMdcSettings.SaveProjectsPickerOptions(fRbSortAlpha.Checked, fCbFavoriteFirst.Checked, (fCbFilterIncludePath <> nil) and fCbFilterIncludePath.Checked);
 end;
 
 

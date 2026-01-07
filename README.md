@@ -8,13 +8,16 @@ MaxLogic Delphi Companion (MDC) is a RAD Studio Delphi 12+ IDE add-in focused on
 
 - Default shortcut: `Ctrl+Shift+P` (configurable, works from any IDE pane and the Welcome Page).
 - Recent and favorite projects with Everything-style filtering (for example: `forms|!test`).
+  - By default, the filter matches project name only.
+  - Optionally, enable `Include path` to also match project paths.
 - Enter or double-click opens the selected project.
 - `Ctrl+F` toggles favorite; `Delete` forgets an entry.
 - Opening a project not in the current project group first closes the current group, then opens the selected project or group.
-- Sorting and visibility options live in the dialog:
+- Sorting and filter options live in the dialog:
   - Alphanumeric vs. last-opened ordering.
   - Favorites-first grouping.
-  - Show/hide projects, project groups, favorites, and non-favorites.
+  - Filter by project kind (projects/project groups) and favorites (favorite/non-favorite).
+  - Optionally include project path in filter matching.
 
 ### Units Picker
 
@@ -30,6 +33,7 @@ MaxLogic Delphi Companion (MDC) is a RAD Studio Delphi 12+ IDE add-in focused on
 - Default shortcut: `Ctrl+Shift+F1` (configurable).
 - Shows Error Insight issues and build errors/warnings in separate lists.
 - Double-click (or Enter) jumps to the line in the editor.
+- `Ctrl+C` copies selected items in an AI-friendly text format.
 - `F1/F2/F3` focuses a list, `F5` refreshes, `Esc` closes.
 - Build errors/warnings have filter boxes for quick narrowing.
 
