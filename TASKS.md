@@ -12,6 +12,11 @@
 
 ## Done
 
+### T-008 Add copy path modes to Problems dialog
+Summary: Provide selectable copy path formats (full/repo-relative/project-relative, Windows/WSL) and persist the selection.
+
+Likely files to touch/read: src/MaxLogic.DelphiCompanion.FocusErrorInsight.pas, src/MaxLogic.DelphiCompanion.Settings.pas
+
 ### T-001 Open units in source view
 Summary: Ensure the units picker opens the .pas source editor instead of the form designer.
 

@@ -6,6 +6,7 @@ All notable user-visible changes to this project will be documented in this file
 
 ### Added
 - Problems dialog now copies selected entries with Ctrl+C in an AI-friendly text format. (T-007)
+- Problems dialog now supports selectable copy path formats (full/repo-relative/project-relative, Windows/WSL). (T-008)
 
 ### Changed
 - Project/group opening now avoids merging into the current project group when the target is not part of it. (T-002)

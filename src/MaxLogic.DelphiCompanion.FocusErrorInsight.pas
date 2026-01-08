@@ -33,12 +33,21 @@ resourcestring
   SNoBuildErrors = '(No build errors found or not accessible)';
   SNoBuildWarnings = '(No build warnings found or not accessible)';
   SBuildMessagesUnavailable = '(Build messages not accessible right now)';
+  SCopyPathModeLabel = '&Copy format:';
+  SCopyPathModeHint = 'Select the format used when copying paths';
+  SCopyPathFullWindows = 'Full path (Windows)';
+  SCopyPathFullWsl = 'Full path (WSL)';
+  SCopyPathRepoRelWindows = 'Repo-relative (Windows)';
+  SCopyPathRepoRelWsl = 'Repo-relative (WSL)';
+  SCopyPathProjectRelWindows = 'Project-relative (Windows)';
+  SCopyPathProjectRelWsl = 'Project-relative (WSL)';
 
 type
   PHWND = ^hwnd;
 
 type
   TMdcProblemKind = (pkErrorInsightError, pkErrorInsightWarning, pkBuildError, pkBuildWarning);
+  TMdcCopyPathMode = (cpmFullWindows, cpmFullWsl, cpmRepoRelWindows, cpmRepoRelWsl, cpmProjectRelWindows, cpmProjectRelWsl);
 
   TMdcProblemItem = class
   public
@@ -63,9 +72,13 @@ type
     fLblEi: TStaticText;
     fLblErr: TStaticText;
     fLblWarn: TStaticText;
+    fLblCopyPathMode: TStaticText;
 
     fBtnRefresh: TButton;
     fBtnClose: TButton;
+
+    fCbCopyPathMode: TComboBox;
+    fCopyPathMode: TMdcCopyPathMode;
 
     fLastEiSignature: string;
     fEiRefreshing: Boolean;
@@ -84,14 +97,18 @@ type
 
     procedure LbDblClick(Sender: TObject);
     procedure LbKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+    procedure ProblemsListBoxKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
 
     procedure BtnRefreshClick(Sender: TObject);
     procedure BtnCloseClick(Sender: TObject);
+
+    procedure CopyPathModeChange(Sender: TObject);
 
     procedure ClearListBoxItems(aLb: TListBox; aFreeObjects: Boolean = True);
     procedure ClearBuildItems(var aItems: TArray<TMdcProblemItem>);
     function SelectedItem(aLb: TListBox): TMdcProblemItem;
     procedure CopySelectionToClipboard(aLb: TListBox);
+    function FormatMsg(aItem: TMdcProblemItem): String;
 
     procedure BuildFilterChange(Sender: TObject);
     procedure BuildFilterKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
@@ -114,6 +131,11 @@ type
     function BuildEiSignature(const aErrors: TOTAErrors): string;
 
     function TryResolveFileName(const aFileName: string; out aResolved: string): Boolean;
+    function TryGetRepoRoot(const aStartDir: string; out aRootDir: string): Boolean;
+    function GetProjectBaseDir(const aFallbackFileName: string): string;
+    function MakeRelative(const aBaseDir, aAbsPath: string; out aRelPath: string): Boolean;
+    function ToWindowsPath(const aAbs: string): string;
+    function ToWslPath(const aAbs: string): string;
 
     function FindMessageViewForm: TForm;
     procedure EnsureMessageViewShown;
@@ -127,8 +149,9 @@ type
 
     function AppHook(var aMsg: TMessage): Boolean;
 
-
     class procedure ShowSingleton;
+  protected
+    function IsShortCut(var Message: TWMKey): Boolean; override;
   public
     constructor Create(aOwner: TComponent); override;
     destructor Destroy; override;
@@ -219,6 +242,8 @@ end;
 { TMdcProblemsForm }
 
 constructor TMdcProblemsForm.Create(aOwner: TComponent);
+var
+  lMode: Integer;
 begin
   inherited CreateNew(aOwner);
 
@@ -242,7 +267,7 @@ begin
   fLbErrorInsight.IntegralHeight := False;
   fLbErrorInsight.MultiSelect := True;
   fLbErrorInsight.OnDblClick := LbDblClick;
-  fLbErrorInsight.OnKeyDown := LbKeyDown;
+  fLbErrorInsight.OnKeyDown := ProblemsListBoxKeyDown;
   fLbErrorInsight.TabStop := True;
 
   fLblEi := TStaticText.Create(self);
@@ -257,7 +282,7 @@ begin
   fLbBuildErrors.IntegralHeight := False;
   fLbBuildErrors.MultiSelect := True;
   fLbBuildErrors.OnDblClick := LbDblClick;
-  fLbBuildErrors.OnKeyDown := LbKeyDown;
+  fLbBuildErrors.OnKeyDown := ProblemsListBoxKeyDown;
   fLbBuildErrors.TabStop := True;
 
   fLblErr := TStaticText.Create(self);
@@ -279,7 +304,7 @@ begin
   fLbBuildWarnings.IntegralHeight := False;
   fLbBuildWarnings.MultiSelect := True;
   fLbBuildWarnings.OnDblClick := LbDblClick;
-  fLbBuildWarnings.OnKeyDown := LbKeyDown;
+  fLbBuildWarnings.OnKeyDown := ProblemsListBoxKeyDown;
   fLbBuildWarnings.TabStop := True;
 
   fLblWarn := TStaticText.Create(self);
@@ -310,14 +335,32 @@ begin
   fBtnClose.OnClick := BtnCloseClick;
   fBtnClose.OnKeyDown := LbKeyDown;
 
+  fLblCopyPathMode := TStaticText.Create(self);
+  fLblCopyPathMode.Parent := self;
+  fLblCopyPathMode.Caption := SCopyPathModeLabel;
+  fLblCopyPathMode.ShowHint := True;
+  fLblCopyPathMode.Hint := SCopyPathModeHint;
+  fLblCopyPathMode.Anchors := [akLeft, akBottom];
+
+  fCbCopyPathMode := TComboBox.Create(self);
+  fCbCopyPathMode.Parent := self;
+  fCbCopyPathMode.Style := csDropDownList;
+  fCbCopyPathMode.TabStop := True;
+  fCbCopyPathMode.Anchors := [akLeft, akBottom, akRight];
+  fCbCopyPathMode.OnKeyDown := LbKeyDown;
+  fCbCopyPathMode.Items.Add(SCopyPathFullWindows);
+  fCbCopyPathMode.Items.Add(SCopyPathFullWsl);
+  fCbCopyPathMode.Items.Add(SCopyPathRepoRelWindows);
+  fCbCopyPathMode.Items.Add(SCopyPathRepoRelWsl);
+  fCbCopyPathMode.Items.Add(SCopyPathProjectRelWindows);
+  fCbCopyPathMode.Items.Add(SCopyPathProjectRelWsl);
+  fLblCopyPathMode.FocusControl := fCbCopyPathMode;
+
   // Timer: refresh Error Insight periodically
   fTimer := TTimer.Create(self);
   fTimer.Interval := 750;
   fTimer.Enabled := True;
   fTimer.OnTimer := TimerTick;
-
-  KeyPreview := True;
-  OnKeyDown := LbKeyDown;
 
   fLbErrorInsight.TabOrder := 0;
   fEdBuildErrors.TabOrder := 1;
@@ -326,9 +369,21 @@ begin
   fLbBuildWarnings.TabOrder := 4;
   fBtnRefresh.TabOrder := 5;
   fBtnClose.TabOrder := 6;
+  fCbCopyPathMode.TabOrder := 7;
 
   UpdateErrorInsightTitle(0);
   UpdateBuildTitles(0, 0);
+
+  TMdcSettings.LoadProblemsCopyPathMode(lMode);
+  if (lMode < 0) or (lMode > Ord(High(TMdcCopyPathMode))) then
+    lMode := Ord(TMdcCopyPathMode.cpmFullWindows);
+  fCopyPathMode := TMdcCopyPathMode(lMode);
+  if lMode < fCbCopyPathMode.Items.Count then
+    fCbCopyPathMode.ItemIndex := lMode
+  else
+    fCbCopyPathMode.ItemIndex := 0;
+
+  fCbCopyPathMode.OnChange := CopyPathModeChange;
 
   UpdateLayout;
   ActiveControl := fLbErrorInsight;
@@ -343,7 +398,29 @@ begin
     MdcLog('Create: HookMainWindow=FAILED');
   end;
 
+  KeyPreview := True;
+end;
 
+function TMdcProblemsForm.IsShortCut(var Message: TWMKey): Boolean;
+var
+  lCtrl: TWinControl;
+begin
+  // Only while our dialog is active
+  if (not Visible) or (Screen.ActiveForm <> Self) then
+    Exit(inherited IsShortCut(Message));
+
+  // Handle Ctrl+C before inherited (don’t let IDE/menu shortcuts grab it)
+  if (Message.CharCode = Ord('C')) and (GetKeyState(VK_CONTROL) < 0) then
+  begin
+    lCtrl := FindControl(GetFocus);
+    if lCtrl is TListBox then
+    begin
+      CopySelectionToClipboard(TListBox(lCtrl));
+      Exit(True);
+    end;
+  end;
+
+  Result := inherited IsShortCut(Message);
 end;
 
 destructor TMdcProblemsForm.Destroy;
@@ -439,6 +516,8 @@ var
   lListTopEi, lListTopBuild, lListWidth, lListHeightEi, lListHeightBuild: Integer;
   lFilterTop: Integer;
   lButtonsTop, lButtonHeight, lButtonWidth: Integer;
+  lComboTop, lComboHeight, lComboLabelHeight, lComboLabelWidth: Integer;
+  lComboLabelTop, lComboLeft, lComboWidth: Integer;
 
   function SV(v: Integer): Integer;
   begin
@@ -449,7 +528,8 @@ begin
   if (fLbErrorInsight = nil) or (fLbBuildErrors = nil) or (fLbBuildWarnings = nil) or
      (fEdBuildErrors = nil) or (fEdBuildWarnings = nil) or
      (fLblEi = nil) or (fLblErr = nil) or (fLblWarn = nil) or
-     (fBtnRefresh = nil) or (fBtnClose = nil) then
+     (fBtnRefresh = nil) or (fBtnClose = nil) or
+     (fLblCopyPathMode = nil) or (fCbCopyPathMode = nil) then
     Exit;
 
   lMargin := SV(10);
@@ -462,6 +542,9 @@ begin
   lButtonHeight := SV(30);
   lButtonWidth := SV(140);
   lButtonsTop := ClientHeight - SV(45);
+  lComboHeight := SV(24);
+  lComboLabelHeight := SV(18);
+  lComboLabelWidth := SV(100);
 
   lListTopEi := lLabelTop + lLabelHeight + lLabelGap;
   lFilterTop := lLabelTop + lLabelHeight + lLabelGap;
@@ -492,6 +575,16 @@ begin
 
   fBtnRefresh.SetBounds(lMargin, lButtonsTop, lButtonWidth, lButtonHeight);
   fBtnClose.SetBounds(fBtnRefresh.Left + fBtnRefresh.Width + lGap, lButtonsTop, lButtonWidth, lButtonHeight);
+
+  lComboLabelTop := lButtonsTop + ((lButtonHeight - lComboLabelHeight) div 2);
+  lComboTop := lButtonsTop + ((lButtonHeight - lComboHeight) div 2);
+  lComboLeft := fBtnClose.Left + fBtnClose.Width + lGap;
+  fLblCopyPathMode.SetBounds(lComboLeft, lComboLabelTop, lComboLabelWidth, lComboLabelHeight);
+  lComboLeft := fLblCopyPathMode.Left + fLblCopyPathMode.Width + SV(6);
+  lComboWidth := ClientWidth - lComboLeft - lMargin;
+  if lComboWidth < SV(120) then
+    lComboWidth := SV(120);
+  fCbCopyPathMode.SetBounds(lComboLeft, lComboTop, lComboWidth, lComboHeight);
 end;
 
 procedure TMdcProblemsForm.TimerTick(Sender: TObject);
@@ -506,6 +599,9 @@ end;
 
 
 function TMdcProblemsForm.AppHook(var aMsg: TMessage): Boolean;
+var
+  lFocus: hwnd;
+  lCtrl: TWinControl;
 begin
   Result := False;
 
@@ -563,6 +659,24 @@ begin
   Close;
 end;
 
+procedure TMdcProblemsForm.CopyPathModeChange(Sender: TObject);
+var
+  lIndex: Integer;
+begin
+  if fCbCopyPathMode = nil then
+    Exit;
+
+  lIndex := fCbCopyPathMode.ItemIndex;
+  if (lIndex < 0) or (lIndex > Ord(High(TMdcCopyPathMode))) then
+    Exit;
+
+  if Ord(fCopyPathMode) = lIndex then
+    Exit;
+
+  fCopyPathMode := TMdcCopyPathMode(lIndex);
+  TMdcSettings.SaveProblemsCopyPathMode(lIndex);
+end;
+
 procedure TMdcProblemsForm.LbDblClick(Sender: TObject);
 var
   lItem: TMdcProblemItem;
@@ -615,13 +729,6 @@ begin
     exit;
   end;
 
-  if (Key = Ord('C')) and (ssCtrl in Shift) and (Sender is TListBox) then
-  begin
-    CopySelectionToClipboard(TListBox(Sender));
-    Key := 0;
-    exit;
-  end;
-
   if (Key = VK_RETURN) and (Sender is TListBox) then
   begin
     lItem := SelectedItem(TListBox(Sender));
@@ -631,6 +738,36 @@ begin
     Key := 0;
     exit;
   end;
+end;
+
+procedure TMdcProblemsForm.ProblemsListBoxKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+var
+  lLb: TListBox;
+  i: Integer;
+begin
+  if not (Sender is TListBox) then
+    Exit;
+
+  lLb := TListBox(Sender);
+
+  if (Key = Ord('A')) and (ssCtrl in Shift) then
+  begin
+    if lLb.MultiSelect then
+    begin
+      lLb.Items.BeginUpdate;
+      try
+        for i := 0 to lLb.Items.Count - 1 do
+          lLb.Selected[i] := True;
+      finally
+        lLb.Items.EndUpdate;
+      end;
+    end;
+
+    Key := 0;
+    Exit;
+  end;
+
+  LbKeyDown(Sender, Key, Shift);
 end;
 
 procedure TMdcProblemsForm.BuildFilterChange(Sender: TObject);
@@ -765,48 +902,124 @@ begin
   Result := TMdcProblemItem(lObj);
 end;
 
+function TMdcProblemsForm.FormatMsg(aItem: TMdcProblemItem): String;
+var
+  lFileName: string;
+  lAbs: string;
+  lResolved: string;
+  lBaseDir: string;
+  lRel: string;
+  lDisplay: string;
+begin
+  lDisplay := '';
+  lFileName := '';
+
+  if aItem <> nil then
+    lFileName := aItem.FileName;
+
+  if Trim(lFileName) <> '' then
+  begin
+    lAbs := lFileName;
+    if TryResolveFileName(lFileName, lResolved) then
+      lAbs := lResolved
+    else
+      lAbs := ExpandFileName(lFileName);
+
+    case fCopyPathMode of
+      TMdcCopyPathMode.cpmFullWindows:
+        lDisplay := ToWindowsPath(lAbs);
+      TMdcCopyPathMode.cpmFullWsl:
+        lDisplay := ToWslPath(lAbs);
+      TMdcCopyPathMode.cpmRepoRelWindows,
+      TMdcCopyPathMode.cpmRepoRelWsl:
+        begin
+          if TryGetRepoRoot(ExtractFileDir(lAbs), lBaseDir) and MakeRelative(lBaseDir, lAbs, lRel) then
+            lDisplay := lRel
+          else
+            lDisplay := lAbs;
+
+          if fCopyPathMode = TMdcCopyPathMode.cpmRepoRelWsl then
+            lDisplay := ToWslPath(lDisplay)
+          else
+            lDisplay := ToWindowsPath(lDisplay);
+        end;
+      TMdcCopyPathMode.cpmProjectRelWindows,
+      TMdcCopyPathMode.cpmProjectRelWsl:
+        begin
+          lBaseDir := GetProjectBaseDir(lAbs);
+          if (lBaseDir <> '') and MakeRelative(lBaseDir, lAbs, lRel) then
+            lDisplay := lRel
+          else
+            lDisplay := lAbs;
+
+          if fCopyPathMode = TMdcCopyPathMode.cpmProjectRelWsl then
+            lDisplay := ToWslPath(lDisplay)
+          else
+            lDisplay := ToWindowsPath(lDisplay);
+        end;
+    end;
+  end;
+
+  Result := Format(
+    '%s(%d,%d): %s',
+    [lDisplay,
+      aItem.LineNo,
+      aItem.ColNo,
+      aItem.Text
+      ]);
+end;
+
 procedure TMdcProblemsForm.CopySelectionToClipboard(aLb: TListBox);
-const
-  cFmt = '%s(%d,%d): %s - %s';
 var
   lLines: TStringList;
   g: IGarbo;
   i: Integer;
+  lHasSelection: Boolean;
   lItem: TMdcProblemItem;
   lKind: string;
 begin
+  MdcLog('CopySelectionToClipboard: enter');
   if aLb = nil then
+  begin
+    MdcLog('CopySelectionToClipboard:aLb is nil -> exit');
     Exit;
+  end;
 
-  if aLb.SelCount = 0 then
+  lHasSelection := (aLb.SelCount > 0);
+  if (not lHasSelection) and (aLb.ItemIndex < 0) then
+  begin
+    MdcLog('CopySelectionToClipboard: hasSelection is false => exit');
     Exit;
+  end;
 
   GC(lLines, TStringList.Create, g);
 
   for i := 0 to aLb.Items.Count - 1 do
   begin
-    if not aLb.Selected[i] then
-      Continue;
+    if lHasSelection then
+    begin
+      if not aLb.Selected[i] then
+        Continue;
+    end else begin
+      if i <> aLb.ItemIndex then
+        Continue;
+    end;
 
     lItem := TMdcProblemItem(aLb.Items.Objects[i]);
     if lItem = nil then
+    begin
+      lLines.Add(aLb.Items[i]);
       Continue;
-
-    case lItem.kind of
-      pkErrorInsightError:   lKind := 'ErrorInsightError';
-      pkErrorInsightWarning: lKind := 'ErrorInsightWarning';
-      pkBuildError:          lKind := 'BuildError';
-      pkBuildWarning:        lKind := 'BuildWarning';
-    else
-      lKind := 'Unknown';
     end;
 
-    lLines.Add(Format(cFmt,
-      [lItem.FileName, lItem.LineNo, lItem.ColNo, lKind, lItem.Text]));
+    lLines.Add(FormatMsg(lItem));
   end;
 
   if lLines.Count = 0 then
+  begin
+    MdcLog('CopySelectionToClipboard:  lLines.Count = 0 => exit');
     Exit;
+  end;
 
   ClipBoard.AsText := lLines.Text;
 
@@ -1161,6 +1374,111 @@ begin
   end;
 
   Result := False;
+end;
+
+function TMdcProblemsForm.TryGetRepoRoot(const aStartDir: string; out aRootDir: string): Boolean;
+var
+  lDir: string;
+  lParent: string;
+begin
+  Result := False;
+  aRootDir := '';
+
+  lDir := ExcludeTrailingPathDelimiter(ExpandFileName(aStartDir));
+  if lDir = '' then
+    Exit(False);
+
+  while True do
+  begin
+    if DirectoryExists(TPath.Combine(lDir, '.git')) or FileExists(TPath.Combine(lDir, '.git')) or
+       DirectoryExists(TPath.Combine(lDir, '.svn')) then
+    begin
+      aRootDir := lDir;
+      Exit(True);
+    end;
+
+    lParent := ExtractFileDir(lDir);
+    if (lParent = '') or SameText(lParent, lDir) then
+      Break;
+
+    lDir := lParent;
+  end;
+end;
+
+function TMdcProblemsForm.GetProjectBaseDir(const aFallbackFileName: string): string;
+var
+  lMods: IOTAModuleServices;
+  lProj: IOTAProject;
+begin
+  Result := '';
+
+  if Supports(BorlandIDEServices, IOTAModuleServices, lMods) then
+  begin
+    lProj := lMods.GetActiveProject;
+    if (lProj <> nil) and (lProj.FileName <> '') then
+    begin
+      Result := ExtractFileDir(lProj.FileName);
+      if Result <> '' then
+        Exit;
+    end;
+  end;
+
+  if aFallbackFileName <> '' then
+    Result := ExtractFileDir(aFallbackFileName);
+end;
+
+function TMdcProblemsForm.MakeRelative(const aBaseDir, aAbsPath: string; out aRelPath: string): Boolean;
+var
+  lBase: string;
+  lRel: string;
+begin
+  Result := False;
+  aRelPath := '';
+
+  if (aBaseDir = '') or (aAbsPath = '') then
+    Exit(False);
+
+  lBase := IncludeTrailingPathDelimiter(ExpandFileName(aBaseDir));
+  lRel := ExtractRelativePath(lBase, ExpandFileName(aAbsPath));
+  if lRel = '' then
+    Exit(False);
+
+  if ExtractFileDrive(lRel) <> '' then
+    Exit(False);
+
+  aRelPath := lRel;
+  Result := True;
+end;
+
+function TMdcProblemsForm.ToWindowsPath(const aAbs: string): string;
+begin
+  Result := StringReplace(aAbs, '/', '\', [rfReplaceAll]);
+end;
+
+function TMdcProblemsForm.ToWslPath(const aAbs: string): string;
+var
+  lPath: string;
+  lDrive: string;
+  lRest: string;
+begin
+  if aAbs = '' then
+    Exit('');
+
+  lPath := StringReplace(aAbs, '/', '\', [rfReplaceAll]);
+  if (Length(lPath) >= 2) and (lPath[2] = ':') then
+  begin
+    lDrive := LowerCase(Copy(lPath, 1, 1));
+    lRest := Copy(lPath, 3, MaxInt);
+    lRest := StringReplace(lRest, '\', '/', [rfReplaceAll]);
+    if (lRest <> '') and (lRest[1] <> '/') then
+      lRest := '/' + lRest;
+
+    // TODO: allow our WSL mount root to be configured if /mnt is not used.
+    Result := '/mnt/' + lDrive + lRest;
+    Exit;
+  end;
+
+  Result := StringReplace(lPath, '\', '/', [rfReplaceAll]);
 end;
 
 function TMdcProblemsForm.BuildEiSignature(const aErrors: TOTAErrors): string;

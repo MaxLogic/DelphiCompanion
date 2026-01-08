@@ -38,6 +38,10 @@ type
     class procedure LoadFocusErrorInsightShortcut(out aSc: TShortCut); static;
     class procedure SaveFocusErrorInsightShortcut(aSc: TShortCut); static;
 
+    class function DefaultProblemsCopyPathMode: Integer; static;
+    class procedure LoadProblemsCopyPathMode(out aMode: Integer); static;
+    class procedure SaveProblemsCopyPathMode(aMode: Integer); static;
+
   end;
 
 implementation
@@ -84,6 +88,9 @@ const
 
   CIniSectionAccessibility = 'Accessibility';
   CIniKeyFocusErrorInsight = 'FocusErrorInsightShortcut';
+
+  CIniSectionProblems = 'Problems';
+  CIniKeyCopyPathMode = 'CopyPathMode';
 
 
 
@@ -133,6 +140,48 @@ begin
   else
     lIni.WriteString(CIniSectionAccessibility, CIniKeyFocusErrorInsight, ShortCutToText(aSc));
 
+  lIni.UpdateFile;
+end;
+
+class function TMdcSettings.DefaultProblemsCopyPathMode: Integer;
+begin
+  Result := 0;
+end;
+
+class procedure TMdcSettings.LoadProblemsCopyPathMode(out aMode: Integer);
+var
+  lIni: TMemIniFile;
+  g: IGarbo;
+  lIniName: string;
+begin
+  aMode := DefaultProblemsCopyPathMode;
+
+  lIniName := GetConfigFileName;
+  if not FileExists(lIniName) then
+    Exit;
+
+  GC(lIni, TMemIniFile.Create(lIniName, TEncoding.UTF8), g);
+  lIni.CaseSensitive := False;
+
+  aMode := lIni.ReadInteger(CIniSectionProblems, CIniKeyCopyPathMode, aMode);
+end;
+
+class procedure TMdcSettings.SaveProblemsCopyPathMode(aMode: Integer);
+var
+  lIni: TMemIniFile;
+  g: IGarbo;
+  lIniName: string;
+  lDir: string;
+begin
+  lIniName := GetConfigFileName;
+  lDir := ExtractFilePath(lIniName);
+  if lDir <> '' then
+    ForceDirectories(lDir);
+
+  GC(lIni, TMemIniFile.Create(lIniName, TEncoding.UTF8), g);
+  lIni.CaseSensitive := False;
+
+  lIni.WriteInteger(CIniSectionProblems, CIniKeyCopyPathMode, aMode);
   lIni.UpdateFile;
 end;
 
