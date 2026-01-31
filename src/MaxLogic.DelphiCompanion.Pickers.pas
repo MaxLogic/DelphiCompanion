@@ -748,9 +748,15 @@ var
   lCheckedAfter: Boolean;
   lWasOpen: Boolean;
   lIsOpen: Boolean;
+  lPrevItemIndex: Integer;
+  lRestoreIndex: Integer;
 begin
   if fIsProjects then
     Exit;
+
+  lPrevItemIndex := -1;
+  if (fList <> nil) and (fList.Selected <> nil) then
+    lPrevItemIndex := fList.Selected.Index;
 
   lFiles := SelectedFileNames;
   if Length(lFiles) = 0 then
@@ -784,6 +790,16 @@ begin
   begin
     LoadItems;
     ApplyFilter;
+
+    if fList.Items.Count > 0 then
+    begin
+      if (lPrevItemIndex < 0) or (lPrevItemIndex >= fList.Items.Count) then
+        lRestoreIndex := fList.Items.Count - 1
+      else
+        lRestoreIndex := lPrevItemIndex;
+
+      fList.Items[lRestoreIndex].Selected := True;
+    end;
   end;
 
   if lClosedAny then
@@ -1174,10 +1190,40 @@ begin
 end;
 
 procedure TMaxLogicPickerForm.EditKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+var
+  lIndex: Integer;
 begin
   if Key = VK_DOWN then
   begin
     SafeFocus(fList);
+    Key := 0;
+  end else if (Key = VK_HOME) or (Key = VK_END) then
+  begin
+    if (fList <> nil) and (fList.Items.Count > 0) then
+    begin
+      SafeFocus(fList);
+      if Key = VK_HOME then
+        lIndex := 0
+      else
+        lIndex := fList.Items.Count - 1;
+
+      fList.Items.BeginUpdate;
+      try
+        for lIndex := 0 to fList.Items.Count - 1 do
+          fList.Items[lIndex].Selected := False;
+
+        if Key = VK_HOME then
+          lIndex := 0
+        else
+          lIndex := fList.Items.Count - 1;
+
+        fList.Items[lIndex].Selected := True;
+        fList.Items[lIndex].Focused := True;
+        fList.Items[lIndex].MakeVisible(False);
+      finally
+        fList.Items.EndUpdate;
+      end;
+    end;
     Key := 0;
   end else if Key = VK_ESCAPE then
   begin
