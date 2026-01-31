@@ -24,7 +24,7 @@ implementation
 uses
   System.Generics.Collections, System.IOUtils, System.Math, system.strUtils,
   Winapi.CommCtrl, Winapi.Messages, Winapi.Windows,
-  Vcl.ClipBrd, Vcl.ComCtrls, Vcl.Controls, Vcl.ExtCtrls, Vcl.Forms, Vcl.Graphics, Vcl.StdCtrls,
+  Vcl.ClipBrd, Vcl.ComCtrls, Vcl.Controls, Vcl.ExtCtrls, Vcl.Forms, Vcl.Graphics, Vcl.Menus, Vcl.StdCtrls,
   ToolsAPI,
   AutoFree, MaxLogic.DelphiCompanion.IdeApi, MaxLogic.DelphiCompanion.Settings, maxLogic.StrUtils;
 
@@ -33,7 +33,7 @@ resourcestring
   SUnitsTitle    = 'MaxLogic: Units';
   SFilterHint =
     'Type to filter (Everything-style). Enter opens. Esc closes. ' +
-    'Ctrl+C copies selected file contents as Markdown.';
+    'Ctrl+C copies unit context as Markdown. Ctrl+W closes open units. Right-click for more.';
   SFilterHintProject = 'Type to filter (Everything-style). Enter opens. Esc closes. Ctrl+F toggles favorite. Del forgets.';
 
 const
@@ -42,6 +42,7 @@ const
 
 type
   TMdcUnitScope = (usOpenEditors, usCurrentProject, usProjectGroup);
+  TCopyPathMode = (pmFileNameOnly, pmRelVcsWin, pmRelVcsLinux, pmRelProjWin, pmRelProjLinux, pmFullWin, pmFullLinux);
 
 type
   TMaxLogicPickerForm = class(TForm)
@@ -72,6 +73,15 @@ type
 
     procedure BuildUi(const aTitle: string);
     procedure CopySelectedUnitsAsMarkdownToClipboard;
+    procedure CloseSelectedUnitsInIde;
+    procedure CopySelectedPathsToClipboard(aMode: TCopyPathMode);
+    procedure CopyPathsMenuClick(Sender: TObject);
+    procedure CopyMarkdownMenuClick(Sender: TObject);
+    procedure CloseMenuClick(Sender: TObject);
+    procedure BuildUnitListPopupMenu;
+    procedure AddCopyPathMenuItem(aParent: TMenuItem; const aCaption: string; aMode: TCopyPathMode);
+    function GetActiveProjectDir: string;
+    function ResolveCopyPath(const aFullPath: string; aMode: TCopyPathMode; var aFallbackWarned: Boolean): string;
     procedure ApplyProjectsOptions(var aItems: TArray<TMaxLogicPickItem>);
 
     procedure LoadItems;
@@ -366,6 +376,97 @@ begin
   Result := StringReplace(aText, '&', '', [rfReplaceAll]);
 end;
 
+function IsModuleOpenInIde(const aFileName: string; out aChecked: Boolean): Boolean;
+var
+  lMods: IOTAModuleServices;
+  lFull: string;
+begin
+  aChecked := False;
+  Result := True;
+
+  if aFileName.Trim = '' then
+    Exit;
+
+  lFull := ExpandFileName(aFileName.Trim);
+  if lFull = '' then
+    Exit;
+
+  if not Supports(BorlandIDEServices, IOTAModuleServices, lMods) then
+    Exit;
+
+  aChecked := True;
+  Result := (lMods.FindModule(lFull) <> nil);
+end;
+
+function ToLinuxPath(const aPath: string): string;
+var
+  lPath: string;
+  lDrive: Char;
+  lRest: string;
+begin
+  lPath := aPath;
+  if lPath = '' then
+    Exit('');
+
+  if (Length(lPath) >= 2) and (lPath[2] = ':') then
+  begin
+    lDrive := lPath[1];
+    if (lDrive >= 'A') and (lDrive <= 'Z') then
+      lDrive := Chr(Ord(lDrive) + 32);
+
+    lRest := Copy(lPath, 3, MaxInt);
+    if (lRest <> '') and ((lRest[1] = '\') or (lRest[1] = '/')) then
+      lRest := Copy(lRest, 2, MaxInt);
+
+    lPath := '/mnt/' + lDrive + '/' + lRest;
+  end;
+
+  Result := StringReplace(lPath, '\', '/', [rfReplaceAll]);
+end;
+
+function TryMakeRelativePath(const aBaseDir, aFullPath: string; out aRelPath: string): Boolean;
+var
+  lBase: string;
+begin
+  aRelPath := '';
+  if (aBaseDir = '') or (aFullPath = '') then
+    Exit(False);
+
+  lBase := IncludeTrailingPathDelimiter(aBaseDir);
+  aRelPath := ExtractRelativePath(lBase, aFullPath);
+
+  Result := (aRelPath <> '') and (not TPath.IsPathRooted(aRelPath));
+end;
+
+function FindVcsRootDir(const aStartDir: string; out aRootDir: string): Boolean;
+var
+  lDir: string;
+  lParent: string;
+begin
+  Result := False;
+  aRootDir := '';
+
+  lDir := ExcludeTrailingPathDelimiter(ExpandFileName(aStartDir));
+  if lDir = '' then
+    Exit(False);
+
+  while True do
+  begin
+    if DirectoryExists(TPath.Combine(lDir, '.git')) or FileExists(TPath.Combine(lDir, '.git')) or
+       DirectoryExists(TPath.Combine(lDir, '.svn')) then
+    begin
+      aRootDir := lDir;
+      Exit(True);
+    end;
+
+    lParent := ExtractFileDir(lDir);
+    if (lParent = '') or SameText(lParent, lDir) then
+      Break;
+
+    lDir := lParent;
+  end;
+end;
+
 { TMaxLogicPickerForm }
 
 constructor TMaxLogicPickerForm.CreatePicker(aOwner: TComponent; const aTitle: string; aIsProjects: Boolean);
@@ -637,6 +738,251 @@ begin
   end;
 end;
 
+procedure TMaxLogicPickerForm.CloseSelectedUnitsInIde;
+var
+  lFiles: TArray<string>;
+  lFn: string;
+  lClosedAny: Boolean;
+  lFull: string;
+  lCheckedBefore: Boolean;
+  lCheckedAfter: Boolean;
+  lWasOpen: Boolean;
+  lIsOpen: Boolean;
+begin
+  if fIsProjects then
+    Exit;
+
+  lFiles := SelectedFileNames;
+  if Length(lFiles) = 0 then
+  begin
+    MessageBeep(MB_ICONWARNING);
+    Exit;
+  end;
+
+  lClosedAny := False;
+  for lFn in lFiles do
+  begin
+    if lFn.Trim = '' then
+      Continue;
+
+    lFull := ExpandFileName(lFn.Trim);
+    if lFull = '' then
+      Continue;
+
+    lWasOpen := IsModuleOpenInIde(lFull, lCheckedBefore);
+    if lCheckedBefore and (not lWasOpen) then
+      Continue;
+
+    TMdcIdeApi.CloseInIde(lFull);
+
+    lIsOpen := IsModuleOpenInIde(lFull, lCheckedAfter);
+    if lCheckedBefore and lCheckedAfter and lWasOpen and (not lIsOpen) then
+      lClosedAny := True;
+  end;
+
+  if lClosedAny and (fUnitScope = TMdcUnitScope.usOpenEditors) then
+  begin
+    LoadItems;
+    ApplyFilter;
+  end;
+
+  if lClosedAny then
+    MessageBeep(MB_OK)
+  else
+    MessageBeep(MB_ICONWARNING);
+end;
+
+procedure TMaxLogicPickerForm.CopySelectedPathsToClipboard(aMode: TCopyPathMode);
+var
+  lFiles: TArray<string>;
+  lSb: TStringBuilder;
+  gSb: IGarbo;
+  lFn: string;
+  lFull: string;
+  lLine: string;
+  lWarnFallback: Boolean;
+begin
+  if fIsProjects then
+    Exit;
+
+  lFiles := SelectedFileNames;
+  if Length(lFiles) = 0 then
+  begin
+    MessageBeep(MB_ICONWARNING);
+    Exit;
+  end;
+
+  lWarnFallback := False;
+  GC(lSb, TStringBuilder.Create(1024), gSb);
+
+  for lFn in lFiles do
+  begin
+    if lFn.Trim = '' then
+      Continue;
+
+    lFull := ExpandFileName(lFn.Trim);
+    lLine := ResolveCopyPath(lFull, aMode, lWarnFallback);
+
+    if lSb.Length > 0 then
+      lSb.AppendLine;
+
+    lSb.Append(lLine);
+  end;
+
+  Clipboard.AsText := lSb.ToString;
+  if lWarnFallback then
+    MessageBeep(MB_ICONWARNING);
+  MessageBeep(MB_OK);
+end;
+
+procedure TMaxLogicPickerForm.CopyPathsMenuClick(Sender: TObject);
+var
+  lItem: TMenuItem;
+  lMode: TCopyPathMode;
+begin
+  if not (Sender is TMenuItem) then
+    Exit;
+
+  lItem := TMenuItem(Sender);
+  if (lItem.Tag < Ord(Low(TCopyPathMode))) or (lItem.Tag > Ord(High(TCopyPathMode))) then
+    Exit;
+
+  lMode := TCopyPathMode(lItem.Tag);
+  CopySelectedPathsToClipboard(lMode);
+end;
+
+procedure TMaxLogicPickerForm.CopyMarkdownMenuClick(Sender: TObject);
+begin
+  CopySelectedUnitsAsMarkdownToClipboard;
+end;
+
+procedure TMaxLogicPickerForm.CloseMenuClick(Sender: TObject);
+begin
+  CloseSelectedUnitsInIde;
+end;
+
+procedure TMaxLogicPickerForm.BuildUnitListPopupMenu;
+var
+  lMenu: TPopupMenu;
+  lItem: TMenuItem;
+  lSub: TMenuItem;
+begin
+  if fList = nil then
+    Exit;
+
+  lMenu := TPopupMenu.Create(Self);
+  fList.PopupMenu := lMenu;
+
+  lItem := TMenuItem.Create(lMenu);
+  lItem.Caption := 'Copy unit context as &Markdown';
+  lItem.ShortCut := ShortCut(Ord('C'), [ssCtrl]);
+  lItem.OnClick := CopyMarkdownMenuClick;
+  lMenu.Items.Add(lItem);
+
+  lItem := TMenuItem.Create(lMenu);
+  lItem.Caption := '&Close';
+  lItem.ShortCut := ShortCut(Ord('W'), [ssCtrl]);
+  lItem.OnClick := CloseMenuClick;
+  lMenu.Items.Add(lItem);
+
+  lItem := TMenuItem.Create(lMenu);
+  lItem.Caption := '-';
+  lMenu.Items.Add(lItem);
+
+  lSub := TMenuItem.Create(lMenu);
+  lSub.Caption := 'Copy to &clipboard';
+  lMenu.Items.Add(lSub);
+
+  AddCopyPathMenuItem(lSub, 'Filename (no path)', TCopyPathMode.pmFileNameOnly);
+  AddCopyPathMenuItem(lSub, 'Path relative to git/svn root (windows)', TCopyPathMode.pmRelVcsWin);
+  AddCopyPathMenuItem(lSub, 'Path relative to git/svn root (linux)', TCopyPathMode.pmRelVcsLinux);
+  AddCopyPathMenuItem(lSub, 'Path relative to project (windows)', TCopyPathMode.pmRelProjWin);
+  AddCopyPathMenuItem(lSub, 'Path relative to project (linux)', TCopyPathMode.pmRelProjLinux);
+  AddCopyPathMenuItem(lSub, 'Full path (windows)', TCopyPathMode.pmFullWin);
+  AddCopyPathMenuItem(lSub, 'Full path (linux)', TCopyPathMode.pmFullLinux);
+end;
+
+procedure TMaxLogicPickerForm.AddCopyPathMenuItem(aParent: TMenuItem; const aCaption: string; aMode: TCopyPathMode);
+var
+  lItem: TMenuItem;
+begin
+  if aParent = nil then
+    Exit;
+
+  lItem := TMenuItem.Create(aParent);
+  lItem.Caption := aCaption;
+  lItem.Tag := Ord(aMode);
+  lItem.OnClick := CopyPathsMenuClick;
+  aParent.Add(lItem);
+end;
+
+function TMaxLogicPickerForm.GetActiveProjectDir: string;
+var
+  lMods: IOTAModuleServices;
+  lProj: IOTAProject;
+begin
+  Result := '';
+
+  if Supports(BorlandIDEServices, IOTAModuleServices, lMods) then
+  begin
+    lProj := lMods.GetActiveProject;
+    if (lProj <> nil) and (lProj.FileName <> '') then
+      Result := ExtractFilePath(lProj.FileName);
+  end;
+end;
+
+function TMaxLogicPickerForm.ResolveCopyPath(const aFullPath: string; aMode: TCopyPathMode; var aFallbackWarned: Boolean): string;
+var
+  lBaseDir: string;
+  lRel: string;
+  lRoot: string;
+begin
+  Result := aFullPath;
+
+  case aMode of
+    TCopyPathMode.pmFileNameOnly:
+      Result := ExtractFileName(aFullPath);
+
+    TCopyPathMode.pmRelVcsWin, TCopyPathMode.pmRelVcsLinux:
+      begin
+        if FindVcsRootDir(ExtractFilePath(aFullPath), lRoot) and
+           TryMakeRelativePath(lRoot, aFullPath, lRel) then
+        begin
+          Result := lRel;
+        end else begin
+          Result := aFullPath;
+          if not aFallbackWarned then
+            aFallbackWarned := True;
+        end;
+
+        if aMode = TCopyPathMode.pmRelVcsLinux then
+          Result := ToLinuxPath(Result);
+      end;
+
+    TCopyPathMode.pmRelProjWin, TCopyPathMode.pmRelProjLinux:
+      begin
+        lBaseDir := GetActiveProjectDir;
+        if (lBaseDir <> '') and TryMakeRelativePath(lBaseDir, aFullPath, lRel) then
+        begin
+          Result := lRel;
+        end else begin
+          Result := aFullPath;
+          if not aFallbackWarned then
+            aFallbackWarned := True;
+        end;
+
+        if aMode = TCopyPathMode.pmRelProjLinux then
+          Result := ToLinuxPath(Result);
+      end;
+
+    TCopyPathMode.pmFullWin:
+      Result := aFullPath;
+
+    TCopyPathMode.pmFullLinux:
+      Result := ToLinuxPath(aFullPath);
+  end;
+end;
+
 procedure TMaxLogicPickerForm.BuildUi(const aTitle: string);
 begin
   Caption := aTitle;
@@ -687,6 +1033,9 @@ begin
 
   fList.Columns.Add.Caption := 'Name';
   fList.Columns.Add.Caption := 'Path';
+
+  if not fIsProjects then
+    BuildUnitListPopupMenu;
 
   // Bottom bar
   fBottom := TPanel.Create(Self);
@@ -810,6 +1159,13 @@ begin
     Key := 0;
     Exit;
   end;
+
+  if (not fIsProjects) and (Key = Ord('W')) and (ssCtrl in Shift) and (ActiveControl <> fList) then
+  begin
+    CloseSelectedUnitsInIde;
+    Key := 0;
+    Exit;
+  end;
 end;
 
 procedure TMaxLogicPickerForm.EditChange(Sender: TObject);
@@ -862,6 +1218,13 @@ begin
     if (Key = Ord('C')) and (ssCtrl in Shift) then
     begin
       CopySelectedUnitsAsMarkdownToClipboard;
+      Key := 0;
+      Exit;
+    end;
+
+    if (Key = Ord('W')) and (ssCtrl in Shift) then
+    begin
+      CloseSelectedUnitsInIde;
       Key := 0;
       Exit;
     end;

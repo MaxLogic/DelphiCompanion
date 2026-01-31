@@ -14,6 +14,7 @@ type
     class function GetBdsBaseRegKey: string; static;
 
     class function OpenInIde(const aFileName: string): Boolean; static;
+    class function CloseInIde(const aFileName: string): Boolean; static;
   end;
 
 implementation
@@ -160,6 +161,35 @@ begin
   end;
 
   Result := lSvc.OpenFile(aFileName);
+end;
+
+class function TMdcIdeApi.CloseInIde(const aFileName: string): Boolean;
+var
+  lMods: IOTAModuleServices;
+  lMod: IOTAModule;
+  lFull: string;
+begin
+  Result := False;
+
+  if aFileName.Trim = '' then
+    Exit(False);
+
+  lFull := ExpandFileName(aFileName.Trim);
+  if lFull = '' then
+    Exit(False);
+
+  if not Supports(BorlandIDEServices, IOTAModuleServices, lMods) then
+    Exit(False);
+
+  lMod := lMods.FindModule(lFull);
+  if lMod = nil then
+    Exit(False);
+
+  try
+    Result := lMod.Close;
+  except
+    Result := False;
+  end;
 end;
 
 end.
