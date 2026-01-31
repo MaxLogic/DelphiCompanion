@@ -25,7 +25,9 @@ MaxLogic Delphi Companion (MDC) is a RAD Studio Delphi 12+ IDE add-in focused on
 - Scope options: open editors, current project, or project group.
 - Optional scanning of the project unit search paths (`DCC_UnitSearchPath`).
 - Everything-style filtering; Enter or double-click opens the unit source (`.pas`) view.
-- `Ctrl+C` copies selected unit paths as Markdown.
+- `Ctrl+C` copies selected unit context as Markdown.
+- `Ctrl+W` closes selected units in the IDE (only if already open).
+- Right-click context menu provides copy-path variants (filename, project- or VCS-relative, full paths, Windows/Linux).
 - Multi-select is supported for bulk copy.
 
 ### Problems Dialog 
