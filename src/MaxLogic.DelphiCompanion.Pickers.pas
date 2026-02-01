@@ -109,7 +109,6 @@ type
 
     procedure ScopeClick(Sender: TObject);
     procedure RestoreMainFocus;
-    procedure FocusListEdge(aSelectLast: Boolean);
 
     procedure ToggleFavoriteSelected;
 
@@ -1111,12 +1110,12 @@ begin
 end;
 
 procedure TMaxLogicPickerForm.FormShow(Sender: TObject);
-begin
-  SafeFocus(fEdit);
+  begin
+    SafeFocus(fEdit);
 
-  UpdateScopeLayout;
-  AdjustColumns;
-end;
+    UpdateScopeLayout;
+    AdjustColumns;
+  end;
 
 procedure TMaxLogicPickerForm.FormResize(Sender: TObject);
 begin
@@ -1157,33 +1156,6 @@ begin
   SafeFocus(fEdit);
 end;
 
-procedure TMaxLogicPickerForm.FocusListEdge(aSelectLast: Boolean);
-var
-  lIndex: Integer;
-begin
-  if (fList = nil) or (fList.Items.Count = 0) then
-    Exit;
-
-  SafeFocus(fList);
-
-  fList.Items.BeginUpdate;
-  try
-    for lIndex := 0 to fList.Items.Count - 1 do
-      fList.Items[lIndex].Selected := False;
-
-    if aSelectLast then
-      lIndex := fList.Items.Count - 1
-    else
-      lIndex := 0;
-
-    fList.Items[lIndex].Selected := True;
-    fList.Items[lIndex].Focused := True;
-    fList.Items[lIndex].MakeVisible(False);
-  finally
-    fList.Items.EndUpdate;
-  end;
-end;
-
 
 
 procedure TMaxLogicPickerForm.KeyDown(var Key: Word; Shift: TShiftState);
@@ -1200,13 +1172,6 @@ begin
   if (ssAlt in Shift) and (Key = Ord('L')) then
   begin
     SafeFocus(fList);
-    Key := 0;
-    Exit;
-  end;
-
-  if (ActiveControl = fEdit) and ((Key = VK_HOME) or (Key = VK_END)) then
-  begin
-    FocusListEdge(Key = VK_END);
     Key := 0;
     Exit;
   end;
@@ -1229,10 +1194,6 @@ begin
   if Key = VK_DOWN then
   begin
     SafeFocus(fList);
-    Key := 0;
-  end else if (Key = VK_HOME) or (Key = VK_END) then
-  begin
-    FocusListEdge(Key = VK_END);
     Key := 0;
   end else if Key = VK_ESCAPE then
   begin
