@@ -77,3 +77,7 @@ dunitx-results.xml
 pas-api-map.md
 *.cbk
 sfx
+/zip-project.bat
+/project.zip
+/spec.md
+/docus/The-Delphi-IDE-Open-Tools-API-Version-1.1
