@@ -3,7 +3,7 @@
 interface
 
 uses
-  System.Classes, System.Generics.Defaults, System.SysUtils,
+  System.Classes, System.Generics.Defaults, System.SysUtils, System.SyncObjs,
   MaxLogic.DelphiCompanion.Providers;
 
 type
@@ -22,7 +22,7 @@ type
 implementation
 
 uses
-  System.Generics.Collections, System.IOUtils, System.Math, system.strUtils,
+  System.Generics.Collections, System.IOUtils, System.Math, System.StrUtils,
   Winapi.CommCtrl, Winapi.Messages, Winapi.Windows,
   Vcl.ClipBrd, Vcl.ComCtrls, Vcl.Controls, Vcl.ExtCtrls, Vcl.Forms, Vcl.Graphics, Vcl.Menus, Vcl.StdCtrls,
   ToolsAPI,
@@ -50,6 +50,12 @@ type
     fEdit: TEdit;
     fHint: TStaticText;
     fList: TListView;
+    fFilterTimer: TTimer;
+    fPendingText: string;
+    fThreadJobId: int64;
+    fFilterThreadCount: int64;
+    fClosing: Boolean;
+    fPendingRestoreIndex: Integer;
 
     fBottom: TPanel;
     fScopeBox: TGroupBox;
@@ -86,6 +92,11 @@ type
 
     procedure LoadItems;
     procedure ApplyFilter;
+    procedure FilterTimerTick(Sender: TObject);
+    procedure StartFilterAsync;
+    procedure ApplyFilterResults(const aJobId: int64; const aMatches: TArray<Integer>);
+    procedure CancelPendingFilter;
+    procedure WaitForFilterThreads;
 
     procedure UpdateScopeUi;
     procedure UpdateScopeLayout;
@@ -144,6 +155,7 @@ type
     procedure KeyDown(var Key: Word; Shift: TShiftState); override;
   public
     constructor CreatePicker(aOwner: TComponent; const aTitle: string; aIsProjects: Boolean);
+    destructor Destroy; override;
     function PickFileName(out aFileName: string): Boolean;
   end;
 
@@ -225,6 +237,8 @@ begin
   lItem.FileName := aFileName;
   lItem.Display := ChangeFileExt(ExtractFileName(aFileName), '');
   lItem.Detail := ExtractFilePath(aFileName);
+  lItem.SearchText := lItem.Display + ' ' + lItem.Detail + ' ' + lItem.FileName;
+  lItem.SearchTextNoPath := lItem.Display;
   lItem.IsFavorite := False;
 
   aList.Add(lItem);
@@ -477,6 +491,8 @@ begin
 
   fIsProjects := aIsProjects;
   fLastMainFocus := nil;
+  fClosing := False;
+  fPendingRestoreIndex := -1;
 
   if fIsProjects then
     fWinKey := CWinKeyProjects
@@ -484,6 +500,11 @@ begin
     fWinKey := CWinKeyUnits;
 
   BuildUi(aTitle);
+
+  fFilterTimer := TTimer.Create(Self);
+  fFilterTimer.Enabled := False;
+  fFilterTimer.Interval := 250;
+  fFilterTimer.OnTimer := FilterTimerTick;
 
   if fIsProjects then
   begin
@@ -516,6 +537,13 @@ begin
   OnResize := FormResize;
   OnClose := FormClose;
   OnShow := FormShow;
+end;
+
+destructor TMaxLogicPickerForm.Destroy;
+begin
+  CancelPendingFilter;
+  WaitForFilterThreads;
+  inherited;
 end;
 
 procedure TMaxLogicPickerForm.ApplyProjectsOptions(var aItems: TArray<TMaxLogicPickItem>);
@@ -749,7 +777,6 @@ var
   lWasOpen: Boolean;
   lIsOpen: Boolean;
   lPrevItemIndex: Integer;
-  lRestoreIndex: Integer;
 begin
   if fIsProjects then
     Exit;
@@ -789,17 +816,11 @@ begin
   if lClosedAny and (fUnitScope = TMdcUnitScope.usOpenEditors) then
   begin
     LoadItems;
+    if lPrevItemIndex >= 0 then
+      fPendingRestoreIndex := lPrevItemIndex
+    else
+      fPendingRestoreIndex := -1;
     ApplyFilter;
-
-    if fList.Items.Count > 0 then
-    begin
-      if (lPrevItemIndex < 0) or (lPrevItemIndex >= fList.Items.Count) then
-        lRestoreIndex := fList.Items.Count - 1
-      else
-        lRestoreIndex := lPrevItemIndex;
-
-      fList.Items[lRestoreIndex].Selected := True;
-    end;
   end;
 
   if lClosedAny then
@@ -1125,6 +1146,7 @@ end;
 
 procedure TMaxLogicPickerForm.FormClose(Sender: TObject; var Action: TCloseAction);
 begin
+  CancelPendingFilter;
   TMdcSettings.SaveWindowBounds(fWinKey, Self);
 
   if fIsProjects then
@@ -1514,48 +1536,188 @@ end;
 
 procedure TMaxLogicPickerForm.ApplyFilter;
 var
-  lFilter: TFilterEx; // this is a record
-  li: TListItem;
-  i: Integer;
-  lItem: TMaxLogicPickItem;
-  s: string;
+  lTimer: TTimer;
 begin
+  if fClosing then
+    Exit;
+
+  if fEdit = nil then
+    Exit;
+
+  fPendingText := fEdit.Text;
+  TInterlocked.Increment(fThreadJobId);
+
+  lTimer := fFilterTimer;
+  if lTimer = nil then
+    Exit;
+
+  lTimer.Enabled := False;
+  lTimer.Enabled := True;
+end;
+
+procedure TMaxLogicPickerForm.FilterTimerTick(Sender: TObject);
+var
+  lTimer: TTimer;
+begin
+  lTimer := fFilterTimer;
+  if lTimer <> nil then
+    lTimer.Enabled := False;
+
+  StartFilterAsync;
+end;
+
+procedure TMaxLogicPickerForm.StartFilterAsync;
+var
+  lJobId: int64;
+  lPattern: string;
+  lItemsSnapshot: TArray<TMaxLogicPickItem>;
+  lIncludePath: Boolean;
+  lThread: TThread;
+begin
+  if fClosing then
+    Exit;
+
+  lJobId := TInterlocked.Read(fThreadJobId);
+
+  lPattern := fPendingText;
+  lItemsSnapshot := Copy(fItems);
+
+  if fIsProjects then
+    lIncludePath := (fCbFilterIncludePath = nil) or fCbFilterIncludePath.Checked
+  else
+    lIncludePath := True;
+
+  TInterlocked.Increment(fFilterThreadCount);
+  try
+    lThread := TThread.CreateAnonymousThread(
+      procedure
+      var
+        lFilter: TFilterEx;
+        lMatches: TList<Integer>;
+        g: TGarbos;
+        i: Integer;
+        lCandidate: string;
+        lResults: TArray<Integer>;
+      begin
+        try
+          lFilter := TFilterEx.Create(lPattern);
+          GC(lMatches, TList<Integer>.Create, g);
+
+          for i := 0 to High(lItemsSnapshot) do
+          begin
+            if TInterlocked.Read(fThreadJobId) <> lJobId then
+              Exit;
+
+            if lIncludePath then
+              lCandidate := lItemsSnapshot[i].SearchText
+            else
+              lCandidate := lItemsSnapshot[i].SearchTextNoPath;
+
+            if lFilter.Matches(lCandidate) then
+              lMatches.Add(i);
+          end;
+
+          if TInterlocked.Read(fThreadJobId) <> lJobId then
+            Exit;
+
+          lResults := lMatches.ToArray;
+          TThread.Queue(nil,
+            procedure
+            begin
+              ApplyFilterResults(lJobId, lResults);
+            end);
+        finally
+          TInterlocked.Decrement(fFilterThreadCount);
+        end;
+      end);
+    lThread.FreeOnTerminate := True;
+    lThread.Start;
+  except
+    TInterlocked.Decrement(fFilterThreadCount);
+    raise;
+  end;
+end;
+
+procedure TMaxLogicPickerForm.ApplyFilterResults(const aJobId: int64; const aMatches: TArray<Integer>);
+var
+  li: TListItem;
+  lIdx: Integer;
+  lItem: TMaxLogicPickItem;
+  lRestoreIndex: Integer;
+begin
+  if fClosing then
+    Exit;
+
+  if TInterlocked.Read(fThreadJobId) <> aJobId then
+    Exit;
+
+  if csDestroying in ComponentState then
+    Exit;
+
+  if fList = nil then
+    Exit;
+
   fList.Items.BeginUpdate;
   try
     fList.Items.Clear;
 
-    lFilter := TFilterEx.Create(fEdit.Text); // this is a record, no free required
-
-    for i := 0 to High(fItems) do
+    for lIdx in aMatches do
     begin
-      lItem := fItems[i];
+      if (lIdx < 0) or (lIdx > High(fItems)) then
+        Continue;
 
-      if fIsProjects and (fCbFilterIncludePath <> nil) and (not fCbFilterIncludePath.Checked) then
-        s := lItem.Display
+      lItem := fItems[lIdx];
+      li := fList.Items.Add;
+
+      if lItem.IsFavorite then
+        li.Caption := lItem.Display + ' ★'
       else
-        s := lItem.Display + ' ' + lItem.Detail + ' ' + lItem.FileName;
+        li.Caption := lItem.Display;
 
-      if lFilter.Matches(s) then
-      begin
-        li := fList.Items.Add;
-
-        if lItem.IsFavorite then
-          li.Caption := lItem.Display + ' ★'
-        else
-          li.Caption := lItem.Display;
-
-        li.SubItems.Add(lItem.Detail);
-        li.Data := Pointer(NativeInt(i));
-      end;
+      li.SubItems.Add(lItem.Detail);
+      li.Data := Pointer(NativeInt(lIdx));
     end;
 
     if fList.Items.Count > 0 then
-      fList.Items[0].Selected := True;
+    begin
+      if fPendingRestoreIndex >= 0 then
+      begin
+        lRestoreIndex := fPendingRestoreIndex;
+        if lRestoreIndex >= fList.Items.Count then
+          lRestoreIndex := fList.Items.Count - 1;
+
+        fList.Items[lRestoreIndex].Selected := True;
+      end else begin
+        fList.Items[0].Selected := True;
+      end;
+    end;
+    fPendingRestoreIndex := -1;
   finally
     fList.Items.EndUpdate;
   end;
 
   AdjustColumns;
+end;
+
+procedure TMaxLogicPickerForm.CancelPendingFilter;
+var
+  lTimer: TTimer;
+begin
+  fClosing := True;
+  TInterlocked.Increment(fThreadJobId);
+
+  lTimer := fFilterTimer;
+  if lTimer <> nil then
+    lTimer.Enabled := False;
+end;
+
+procedure TMaxLogicPickerForm.WaitForFilterThreads;
+begin
+  while TInterlocked.Read(fFilterThreadCount) > 0 do
+    CheckSynchronize(10);
+
+  while CheckSynchronize(0) do
+    ;
 end;
 
 function TMaxLogicPickerForm.PickFileName(out aFileName: string): Boolean;

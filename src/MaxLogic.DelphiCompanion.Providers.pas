@@ -10,6 +10,8 @@ type
     Display: string;
     Detail: string;
     FileName: string;
+    SearchText: string;
+    SearchTextNoPath: string;
     IsFavorite: Boolean;
   end;
 
@@ -291,6 +293,8 @@ begin
   Result.FileName := aFileName;
   Result.Display := ExtractFileName(aFileName);
   Result.Detail := ExtractFilePath(aFileName);
+  Result.SearchText := Result.Display + ' ' + Result.Detail + ' ' + Result.FileName;
+  Result.SearchTextNoPath := Result.Display;
   Result.IsFavorite := aIsFavorite;
 end;
 
