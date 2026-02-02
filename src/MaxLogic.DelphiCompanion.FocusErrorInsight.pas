@@ -148,6 +148,7 @@ type
     function TryGetSourceView(const aFileName: string; out aView: IOTAEditView): Boolean;
 
     function AppHook(var aMsg: TMessage): Boolean;
+    procedure FocusEditorView(const aView: IOTAEditView);
 
     class procedure ShowSingleton;
   protected
@@ -2196,81 +2197,110 @@ var
   lOpts: TMdcRttiDumpOptions;
 
   function TryReadMessagesViewText(out aText: string): Boolean;
+  var
+    lOldFocus: hwnd;
+    lOldCtrl: TWinControl;
+    lOldForm: TCustomForm;
   begin
     Result := False;
     aText := '';
 
-    EnsureMessageViewShown;
-    lMsgForm := FindMessageViewForm;
+    lOldFocus := GetFocus;
+    lOldCtrl := Screen.ActiveControl;
+    lOldForm := Screen.ActiveCustomForm;
+    try
+      EnsureMessageViewShown;
+      lMsgForm := FindMessageViewForm;
 
-    if lMsgForm = nil then
-    begin
-      MdcLog('RefreshBuildMessages: MessageViewForm not found');
-      Exit;
-    end;
+      if lMsgForm = nil then
+      begin
+        MdcLog('RefreshBuildMessages: MessageViewForm not found');
+        Exit;
+      end;
 
-    ActivateBuildTabIfPresent(lMsgForm);
+      ActivateBuildTabIfPresent(lMsgForm);
 
-    // Prefer stable name first.
-    lTree := FindWinControlByName(lMsgForm, 'MessageTreeView0');
+      // Prefer stable name first.
+      lTree := FindWinControlByName(lMsgForm, 'MessageTreeView0');
 
-    // Fallback: find something VirtualTree-ish (we keep this broad on purpose).
-    if lTree = nil then
-      lTree := FindFirstByClassNameContains(lMsgForm, 'Virtual');
+      // Fallback: find something VirtualTree-ish (we keep this broad on purpose).
+      if lTree = nil then
+        lTree := FindFirstByClassNameContains(lMsgForm, 'Virtual');
 
-    if lTree = nil then
-      lTree := FindFirstByClassNameContains(lMsgForm, 'DrawTree');
+      if lTree = nil then
+        lTree := FindFirstByClassNameContains(lMsgForm, 'DrawTree');
 
-    if lTree = nil then
-    begin
+      if lTree = nil then
+      begin
+        if GMdcLoggingEnabled then
+        begin
+          MdcLog('RefreshBuildMessages: message tree not found; dumping control tree');
+          DumpControlTree(lMsgForm, '  ');
+        end;
+        Exit;
+      end;
+
       if GMdcLoggingEnabled then
       begin
-        MdcLog('RefreshBuildMessages: message tree not found; dumping control tree');
-        DumpControlTree(lMsgForm, '  ');
+        MdcLog(Format('RefreshBuildMessages: tree found: %s  Name=%s  Handle=%d',
+          [lTree.ClassName, lTree.Name, lTree.Handle]));
+
+        MdcDumpClassHierarchy(lTree, 'RefreshBuildMessages: tree hierarchy');
+
+        lOpts.MaxProps := 250;
+        lOpts.MaxMethods := 400;
+        lOpts.OnlyInteresting := True;
+        MdcDumpRttiMembers(lTree, 'RefreshBuildMessages: tree RTTI (interesting)', lOpts);
       end;
-      Exit;
+
+      // First: try the old “ContentToText” (if the IDE control offers it).
+      if TryInvokeNoArgStringMethod(lTree, 'ContentToText', aText) then
+      begin
+        if GMdcLoggingEnabled then
+          MdcLog(Format('RefreshBuildMessages: ContentToText ok (chars=%d)', [Length(aText)]));
+        Result := True;
+        Exit;
+      end;
+
+      if TryInvokeContentToText(lTree, aText) then
+      begin
+        if GMdcLoggingEnabled then
+          MdcLog(Format('RefreshBuildMessages: ContentToText fallback ok (chars=%d)', [Length(aText)]));
+        Result := True;
+        Exit;
+      end;
+
+      // Second: treat it as a virtual tree and enumerate nodes.
+      if TryVirtualTreeToText(lTree, aText) then
+      begin
+        if GMdcLoggingEnabled then
+          MdcLog(Format('RefreshBuildMessages: VirtualTree extraction ok (chars=%d)', [Length(aText)]));
+        Result := True;
+        Exit;
+      end;
+
+      MdcLog('RefreshBuildMessages: no supported extraction path worked');
+    finally
+      if (lOldCtrl <> nil) and lOldCtrl.CanFocus and lOldCtrl.Visible then
+      begin
+        try
+          lOldCtrl.SetFocus;
+        except
+        end;
+      end else if (lOldForm <> nil) and lOldForm.CanFocus and lOldForm.Visible then
+      begin
+        try
+          lOldForm.SetFocus;
+        except
+        end;
+      end else if lOldFocus <> 0 then
+      begin
+        try
+          Winapi.Windows.SetFocus(lOldFocus);
+        except
+        end;
+      end;
     end;
-
-    if GMdcLoggingEnabled then
-    begin
-      MdcLog(Format('RefreshBuildMessages: tree found: %s  Name=%s  Handle=%d',
-        [lTree.ClassName, lTree.Name, lTree.Handle]));
-
-      MdcDumpClassHierarchy(lTree, 'RefreshBuildMessages: tree hierarchy');
-
-      lOpts.MaxProps := 250;
-      lOpts.MaxMethods := 400;
-      lOpts.OnlyInteresting := True;
-      MdcDumpRttiMembers(lTree, 'RefreshBuildMessages: tree RTTI (interesting)', lOpts);
-    end;
-
-    // First: try the old “ContentToText” (if the IDE control offers it).
-    if TryInvokeNoArgStringMethod(lTree, 'ContentToText', aText) then
-    begin
-      if GMdcLoggingEnabled then
-        MdcLog(Format('RefreshBuildMessages: ContentToText ok (chars=%d)', [Length(aText)]));
-      Result := True;
-      Exit;
-    end;
-
-    if TryInvokeContentToText(lTree, aText) then
-    begin
-      if GMdcLoggingEnabled then
-        MdcLog(Format('RefreshBuildMessages: ContentToText fallback ok (chars=%d)', [Length(aText)]));
-      Result := True;
-      Exit;
-    end;
-
-    // Second: treat it as a virtual tree and enumerate nodes.
-    if TryVirtualTreeToText(lTree, aText) then
-    begin
-      if GMdcLoggingEnabled then
-        MdcLog(Format('RefreshBuildMessages: VirtualTree extraction ok (chars=%d)', [Length(aText)]));
-      Result := True;
-      Exit;
-    end;
-
-    MdcLog('RefreshBuildMessages: no supported extraction path worked');
   end;
 
 begin
@@ -2307,6 +2337,7 @@ var
   lMod: IOTAModule;
   lTargetFile: string;
   lOpened: Boolean;
+  lQueuedView: IOTAEditView;
 
   function NormalizeFileName(const aFileName: string): string;
   begin
@@ -2391,63 +2422,6 @@ var
       Exit(True);
 
     Result := TryGetTopViewForFile(aView);
-  end;
-
-  procedure FocusView(const aView: IOTAEditView);
-  var
-    lCtrl: TWinControl;
-    lWin: INTAEditWindow;
-  begin
-    if Supports(BorlandIDEServices, INTACodeEditorServices, lCodeSvc) then
-    begin
-      lCtrl := lCodeSvc.GetEditorForView(aView);
-      if (lCtrl <> nil) and lCtrl.CanFocus then
-      begin
-        try
-          lCtrl.SetFocus;
-          MdcLog('JumpToItem: focused editor control');
-        except
-          MdcLog('JumpToItem: focusing editor control FAILED');
-        end;
-      end else begin
-        try
-          lCodeSvc.FocusTopEditor;
-          MdcLog('JumpToItem: FocusTopEditor called');
-        except
-          MdcLog('JumpToItem: FocusTopEditor FAILED');
-        end;
-      end;
-    end;
-
-    if Supports(aView, IOTAEditView140, lView140) then
-    begin
-      try
-        lWin := lView140.GetEditWindow;
-        if (lWin <> nil) and (lWin.Form <> nil) then
-        begin
-          lWin.Form.BringToFront;
-          if lWin.Form.HandleAllocated then
-          begin
-            SetForegroundWindow(lWin.Form.Handle);
-            SetActiveWindow(lWin.Form.Handle);
-          end;
-          if lWin.Form.CanFocus then
-            lWin.Form.SetFocus;
-          MdcLog('JumpToItem: focused INTAEditWindow.Form');
-        end else begin
-          MdcLog('JumpToItem: INTAEditWindow/Form missing');
-        end;
-      except
-        MdcLog('JumpToItem: focusing editor window FAILED');
-      end;
-    end else begin
-      try
-        if (application.MainForm <> nil) and application.MainForm.HandleAllocated then
-          SetForegroundWindow(application.MainForm.Handle);
-      except
-      end;
-      MdcLog('JumpToItem: IOTAEditView140 not supported, used fallback');
-    end;
   end;
 
   function CalcCursorPos(const aView: IOTAEditView; const aItem: TMdcProblemItem): TOTAEditPos;
@@ -2572,7 +2546,7 @@ begin
   lPos := CalcCursorPos(lView, aItem);
 
   // Activate the view before moving the caret to avoid the IDE restoring an old cursor position.
-  FocusView(lView);
+  FocusEditorView(lView);
 
   lPosObj := nil;
   if lView <> nil then
@@ -2596,9 +2570,21 @@ begin
     if Supports(lView, IOTAEditView140, lView140) then
       lView140.MoveCursorToView;
     lView.MoveViewToCursor;
+    if lView <> nil then
+      FocusEditorView(lView);
+    if lView <> nil then
+    begin
+      lQueuedView := lView;
+      TThread.Queue(nil,
+        procedure
+        begin
+          FocusEditorView(lQueuedView);
+        end);
+    end;
 
     if GMdcLoggingEnabled then
     begin
+      MdcLog('JumpToItem: re-focused editor view');
       if lPosObj <> nil then
         MdcLog(Format('JumpToItem: after Move -> Row=%d Col=%d LastRow=%d buffer="%s"',
           [lPosObj.Row, lPosObj.Column, lPosObj.LastRow, lView.Buffer.FileName]))
@@ -2736,6 +2722,76 @@ begin
       Result := aView <> nil;
       Exit;
     end;
+  end;
+end;
+
+procedure TMdcProblemsForm.FocusEditorView(const aView: IOTAEditView);
+var
+  lCtrl: TWinControl;
+  lWin: INTAEditWindow;
+  lEditSvc: INTAEditorServices;
+  lForm: TCustomForm;
+  lCodeSvc: INTACodeEditorServices;
+  lView140: IOTAEditView140;
+begin
+  lWin := nil;
+  lForm := nil;
+
+  if Supports(aView, IOTAEditView140, lView140) then
+    lWin := lView140.GetEditWindow;
+
+  if (lWin = nil) and Supports(BorlandIDEServices, INTAEditorServices, lEditSvc) then
+    lWin := lEditSvc.TopEditWindow;
+
+  if (lWin <> nil) then
+    lForm := lWin.Form;
+
+  if (lForm <> nil) then
+  begin
+    try
+      lForm.Show;
+      lForm.BringToFront;
+      if lForm.HandleAllocated then
+      begin
+        SetForegroundWindow(lForm.Handle);
+        SetActiveWindow(lForm.Handle);
+      end;
+      if lForm.CanFocus then
+        lForm.SetFocus;
+      MdcLog('JumpToItem: focused INTAEditWindow.Form');
+    except
+      MdcLog('JumpToItem: focusing editor window FAILED');
+    end;
+  end;
+
+  if Supports(BorlandIDEServices, INTACodeEditorServices, lCodeSvc) then
+  begin
+    lCtrl := nil;
+    if aView <> nil then
+      lCtrl := lCodeSvc.GetEditorForView(aView);
+    if (lCtrl <> nil) and lCtrl.CanFocus then
+    begin
+      try
+        lCtrl.SetFocus;
+        MdcLog('JumpToItem: focused editor control');
+      except
+        MdcLog('JumpToItem: focusing editor control FAILED');
+      end;
+    end;
+
+    try
+      lCodeSvc.FocusTopEditor;
+      MdcLog('JumpToItem: FocusTopEditor called');
+    except
+      MdcLog('JumpToItem: FocusTopEditor FAILED');
+    end;
+  end else begin
+    try
+      if (application.MainForm <> nil) and application.MainForm.HandleAllocated then
+        SetForegroundWindow(application.MainForm.Handle);
+    except
+    end;
+    MdcLog('JumpToItem: INTACodeEditorServices not supported, used fallback');
   end;
 end;
 
