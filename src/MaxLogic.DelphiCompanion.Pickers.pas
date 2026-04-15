@@ -26,7 +26,8 @@ uses
   Winapi.CommCtrl, Winapi.Messages, Winapi.Windows,
   Vcl.ClipBrd, Vcl.ComCtrls, Vcl.Controls, Vcl.ExtCtrls, Vcl.Forms, Vcl.Graphics, Vcl.Menus, Vcl.StdCtrls,
   ToolsAPI,
-  AutoFree, MaxLogic.DelphiCompanion.IdeApi, MaxLogic.DelphiCompanion.Settings, maxLogic.StrUtils;
+  AutoFree, MaxLogic.DelphiCompanion.IdeApi, MaxLogic.DelphiCompanion.Settings,
+  MaxLogic.DelphiCompanion.UnitPathUtils, maxLogic.StrUtils;
 
 resourcestring
   SProjectsTitle = 'MaxLogic: Projects';
@@ -221,22 +222,24 @@ end;
 
 procedure AddUniqueFile(const aFileName: string; aList: TList<TMaxLogicPickItem>; aSeen: TDictionary<string, Byte>);
 var
+  lFileName: string;
   lKey: string;
   lItem: TMaxLogicPickItem;
 begin
 
-  if aFileName.Trim = '' then
+  lFileName := NormalizeUnitFileName(aFileName);
+  if lFileName = '' then
     Exit;
 
-  lKey := AnsiLowerCase(aFileName);
+  lKey := BuildUnitDedupKey(lFileName);
   if aSeen.ContainsKey(lKey) then
     Exit;
 
   aSeen.Add(lKey, 1);
 
-  lItem.FileName := aFileName;
-  lItem.Display := ChangeFileExt(ExtractFileName(aFileName), '');
-  lItem.Detail := ExtractFilePath(aFileName);
+  lItem.FileName := lFileName;
+  lItem.Display := ChangeFileExt(ExtractFileName(lFileName), '');
+  lItem.Detail := ExtractFilePath(lFileName);
   lItem.SearchText := lItem.Display + ' ' + lItem.Detail + ' ' + lItem.FileName;
   lItem.SearchTextNoPath := lItem.Display;
   lItem.IsFavorite := False;

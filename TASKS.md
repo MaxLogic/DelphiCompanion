@@ -12,6 +12,10 @@
 
 ## Done
 
+### T-009 [UNITS] Normalize unit picker paths before dedup
+Outcome: The units picker canonicalizes file paths before it builds the dedup key, so the same unit is shown only once even when `DCC_UnitSearchPath` expansion produces doubled separators like `\\`.
+Proof: `dcc32 -B -Q -Ebin -Ndcu -U".;..\\src;C:\\Program Files (x86)\\Embarcadero\\Studio\\23.0\\source\\DUnitX" MaxLogicDelphiCompanionTests.dpr` succeeds; `tests\\bin\\MaxLogicDelphiCompanionTests.exe --exitbehavior:Continue` passes 2/2 tests; `DelphiAIKit build --project projects/MaxLogicDelphiCompanion.dproj --delphi 23.0 --platform Win32 --config Debug` succeeds.
+
 ### T-008 Add copy path modes to Problems dialog
 Summary: Provide selectable copy path formats (full/repo-relative/project-relative, Windows/WSL) and persist the selection.
 
